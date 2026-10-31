@@ -1,0 +1,145 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -353,11 +353,44 @@
+ 	return true;
+ }
+ 
++
++/*
++ * A-5 stage 0: read-only GPU clock/power state. Boot-arg polarisgpu=1.
++ *
++ * Only the GPUCC window is read. The 3D core registers at 0x5000000 are left
++ * alone: with CX/GX collapsed a read there can hang the bus, which is why the
++ * bring-up contract stages this. Values printed here are the input to the
++ * power-up step (stage 1), not a driver.
++ */
++static void
++pt_gpu_probe(void)
++{
++	uint32_t want = 0;
++	PE_parse_boot_argn("polarisgpu", &want, sizeof(want));
++	if (want == 0) {
++		return;
++	}
++	volatile uint32_t *gpucc = (volatile uint32_t *)ml_io_map(0x5090000u, 0x9000u);
++	if (gpucc == NULL) {
++		printf("POLARIS GPU: GPUCC map failed\n");
++		return;
++	}
++	printf("POLARIS GPU: a5 stage %u read-only, GPUCC=%p\n", want, (void *)gpucc);
++	printf("POLARIS GPU: gdsc cx=%08x gx=%08x cx_hw=%08x\n",
++	    gpucc[0x106c / 4], gpucc[0x100c / 4], gpucc[0x1540 / 4]);
++	printf("POLARIS GPU: rcg 0x00..0x0c %08x %08x %08x %08x\n",
++	    gpucc[0x00 / 4], gpucc[0x04 / 4], gpucc[0x08 / 4], gpucc[0x0c / 4]);
++	printf("POLARIS GPU: cfg 0x10..0x1c %08x %08x %08x %08x\n",
++	    gpucc[0x10 / 4], gpucc[0x14 / 4], gpucc[0x18 / 4], gpucc[0x1c / 4]);
++	printf("POLARIS GPU: stage %u done (no writes)\n", want);
++}
++
+ static void
+ pt_thread(void *arg __unused, wait_result_t result __unused)
+ {
+ 	uint8_t f01[6] = {0}, f12[6] = {0}, query[16] = {0};
+ 	uint8_t raw[MAX_FINGERS * FINGER_BYTES] = {0};
++	pt_gpu_probe();
+ 	pt_gpio = ml_io_map(NORTH_PA, 0x23000);
+ 	pt_reset_gpio = ml_io_map(NORTH_PA + RESET_CFG, 0x1000);
+ 	if (!pt_gpio || !pt_reset_gpio) {
+@@ -449,6 +482,9 @@
+ 		if (pt_f12_fingers(f12[0], f12[2], &reported, &report_mask)) {
+ 			if (report_mask == 0xffu) {
+ 				pt_fingers = reported;
++				if (pt_fingers > 2u) {
++					pt_fingers = 2u;	/* HID path carries at most two contacts */
++				}
+ 				printf("POLARIS HID: Ctrl23 confirmed %u slots, 8-byte report\n", pt_fingers);
+ 			} else {
+ 				printf("POLARIS HID: Ctrl28 is not 8-byte report; refusing HID\n");
+@@ -461,10 +497,9 @@
+ 	if (pt_hid_enabled) {
+ 		unsigned failures = 0;
+ 		bool logged_bad_frame = false;
+-		unsigned candidates[MAX_FINGERS] = {0};
+-		int prior_x[MAX_FINGERS] = {0}, prior_y[MAX_FINGERS] = {0};
+ 		printf("POLARIS HID: experimental F12 base 0x%02x, %u slots, 8 bytes each\n",
+ 		    f12[3], pt_fingers);
++		printf("POLARIS HID: a4 low-latency: poll 8ms, first-frame down, <=2 slots\n");
+ 		for (;;) {
+ 			bool valid = true, present[MAX_FINGERS] = {0};
+ 			int x[MAX_FINGERS] = {0}, y[MAX_FINGERS] = {0};
+@@ -490,12 +525,10 @@
+ 			}
+ 			if (!valid) {
+ 				pt_release();
+-				for (unsigned slot = 0; slot < pt_fingers; ++slot) candidates[slot] = 0;
+-				if (++failures >= 8) {
+-					printf("POLARIS HID: repeated read/invalid frames, stopping\n");
+-					break;
++				if (++failures == 8) {
++					printf("POLARIS HID: repeated invalid frames; backing off, not stopping\n");
+ 				}
+-				pt_wait(20);
++				pt_wait(failures >= 8 ? 100 : 8);
+ 				continue;
+ 			}
+ 			failures = 0;
+@@ -505,32 +538,27 @@
+ 						sweet_hid_touch((int)slot, 0, pt_x[slot], pt_y[slot]);
+ 						pt_down[slot] = false;
+ 					}
+-					candidates[slot] = 0;
+ 					continue;
+ 				}
+ 				if (!pt_down[slot]) {
+-					if (candidates[slot] && x[slot] - prior_x[slot] < 80 &&
+-					    prior_x[slot] - x[slot] < 80 && y[slot] - prior_y[slot] < 80 &&
+-					    prior_y[slot] - y[slot] < 80) {
+-						sweet_hid_touch((int)slot, 1, x[slot], y[slot]);
+-						pt_down[slot] = true;
+-						pt_x[slot] = x[slot]; pt_y[slot] = y[slot];
+-						candidates[slot] = 0;
+-					} else {
+-						candidates[slot] = 1;
+-					}
+-					prior_x[slot] = x[slot]; prior_y[slot] = y[slot];
+-				} else if (x[slot] - pt_x[slot] >= 200 || pt_x[slot] - x[slot] >= 200 ||
+-				    y[slot] - pt_y[slot] >= 200 || pt_y[slot] - y[slot] >= 200) {
++					/*
++					 * First valid frame wins. Requiring a second sample within
++					 * 80 units added one I2C frame of latency and reported the
++					 * second position, which is why fast taps landed elsewhere.
++					 */
++					sweet_hid_touch((int)slot, 1, x[slot], y[slot]);
++					pt_down[slot] = true;
++					pt_x[slot] = x[slot]; pt_y[slot] = y[slot];
++				} else if (x[slot] - pt_x[slot] >= 400 || pt_x[slot] - x[slot] >= 400 ||
++				    y[slot] - pt_y[slot] >= 400 || pt_y[slot] - y[slot] >= 400) {
+ 					sweet_hid_touch((int)slot, 0, pt_x[slot], pt_y[slot]);
+ 					pt_down[slot] = false;
+-					candidates[slot] = 0;
+ 				} else if (x[slot] != pt_x[slot] || y[slot] != pt_y[slot]) {
+ 					sweet_hid_touch((int)slot, 1, x[slot], y[slot]);
+ 					pt_x[slot] = x[slot]; pt_y[slot] = y[slot];
+ 				}
+ 			}
+-			pt_wait(20);
++			pt_wait(8);
+ 		}
+ 	} else {
+ 		for (unsigned i = 0; i < 4; ++i) {
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -350,6 +350,11 @@
+ void
+ AppleCLCD::buildXMap(int32_t sx, int32_t dx, int32_t w, int32_t px0, int32_t px1)
+ {
++	static bool logged = false;
++	if (!logged) {
++		logged = true;
++		IOLog("SWEET FB: a4 x-map %d cols\n", px1 - px0);
++	}
+ 	uint64_t xstep = ((uint64_t)fLogicalW << 16) / fContentW;
+ 	uint64_t xpos = (uint64_t)(px0 - fOffX) * xstep;
+ 	int32_t i;
