@@ -1,0 +1,100 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -118,12 +118,16 @@
+ 	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
+ 	bool          fPowerOff;      /* RequestPowerChange(0) */
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
++	uint16_t      fXMap[SWEET_FB_LOGICAL_W];   /* dst column -> source column */
++	int32_t       fMapSx, fMapDx, fMapW, fMapPx0, fMapPx1;
++	bool          fMapValid;
+ 
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+ 	void addClient(IOMobileFramebufferUserClient *client);
+ 	void removeClient(IOMobileFramebufferUserClient *client);
+ 	void swap(const uint8_t *rec);
+ 	void present(const uint8_t *rec);
++	void buildXMap(int32_t sx, int32_t dx, int32_t w, int32_t px0, int32_t px1);
+ };
+ 
+ OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);
+@@ -177,6 +181,7 @@
+ 	fContentW = fWidth;
+ 	fContentH = fHeight;
+ 	fScale = 0;
++	fMapValid = false;
+ 	if (!native && fWidth <= SWEET_FB_LOGICAL_W && fHeight <= SWEET_FB_LOGICAL_H) {
+ 		fLogicalW = SWEET_FB_LOGICAL_W;
+ 		fLogicalH = SWEET_FB_LOGICAL_H;
+@@ -336,6 +341,37 @@
+ 	}
+ }
+ 
++/*
++ * The scaled present is the only per-pixel loop left in the display path:
++ * 998x2160 nearest-neighbour samples at 60 Hz. Precompute the destination
++ * column -> source column mapping once per swap rectangle so the inner loop
++ * is a table lookup instead of a 16.16 multiply plus two range tests.
++ */
++void
++AppleCLCD::buildXMap(int32_t sx, int32_t dx, int32_t w, int32_t px0, int32_t px1)
++{
++	uint64_t xstep = ((uint64_t)fLogicalW << 16) / fContentW;
++	uint64_t xpos = (uint64_t)(px0 - fOffX) * xstep;
++	int32_t i;
++
++	for (i = 0; i < px1 - px0; i++) {
++		int32_t lx = (int32_t)(xpos >> 16);
++		xpos += xstep;
++		if (lx < dx) {
++			lx = dx;
++		} else if (lx >= dx + w) {
++			lx = dx + w - 1;
++		}
++		fXMap[i] = (uint16_t)(sx + lx - dx);
++	}
++	fMapSx = sx;
++	fMapDx = dx;
++	fMapW = w;
++	fMapPx0 = px0;
++	fMapPx1 = px1;
++	fMapValid = true;
++}
++
+ void
+ AppleCLCD::present(const uint8_t *rec)
+ {
+@@ -458,24 +494,23 @@
+ 			if (py1 > (int32_t)fHeight) {
+ 				py1 = (int32_t)fHeight;
+ 			}
+-			uint64_t xstep = ((uint64_t)fLogicalW << 16) / fContentW;
++			if (!fMapValid || fMapSx != sx || fMapDx != dx || fMapW != w ||
++			    fMapPx0 != px0 || fMapPx1 != px1) {
++				buildXMap(sx, dx, w, px0, px1);
++			}
++			int32_t count = px1 - px0;
+ 			for (int32_t y = py0; y < py1; y++) {
+ 				int32_t ly = (int32_t)(((int64_t)(y - fOffY) * fLogicalH) / fContentH);
+ 				int32_t syy = sy + ly - dy;
+ 				if (syy < sy || syy >= sy + h) {
+ 					continue;
+ 				}
+-				uint32_t *drow = (uint32_t *)(fPixels + (uint64_t)y * fRowBytes);
++				uint32_t *drow = (uint32_t *)(fPixels + (uint64_t)y * fRowBytes) + px0;
+ 				const uint32_t *srow = (const uint32_t *)(src + s->offset +
+ 				    (uint64_t)syy * s->bytesPerRow);
+-				uint64_t xpos = (uint64_t)(px0 - fOffX) * xstep;
+-				for (int32_t x = px0; x < px1; x++) {
+-					int32_t lx = (int32_t)(xpos >> 16);
+-					xpos += xstep;
+-					if (lx < dx || lx >= dx + w) {
+-						continue;
+-					}
+-					drow[x] = srow[sx + lx - dx];
++				const uint16_t *map = fXMap;
++				for (int32_t i = 0; i < count; i++) {
++					drow[i] = srow[map[i]];
+ 				}
+ 			}
+ 		} else if (src != 0 && bpe == 4) {
