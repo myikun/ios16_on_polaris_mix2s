@@ -1,0 +1,138 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -370,6 +370,7 @@
+ static void pt_gpu_power_cx(void);
+ static void pt_gpu_gmu_survey(void);
+ static void pt_gpu_gmu_firmware(void);
++static void pt_gpu_hfi_stage(void);
+ 
+ static void
+ pt_gpu_probe(void)
+@@ -402,6 +403,9 @@
+ 	if (want >= 4u) {
+ 		pt_gpu_gmu_firmware();
+ 	}
++	if (want >= 5u) {
++		pt_gpu_hfi_stage();
++	}
+ 	printf("POLARIS GPU: stage %u done; repeating every 5 s\n", want);
+ }
+ 
+@@ -618,6 +622,116 @@
+ 	printf("POLARIS GPU: fw_init_result=%08x after %u ms (babeface = firmware runs)\n",
+ 	    result, i);
+ 	printf("POLARIS GPU: hfi_ctrl_status=%08x\n", gmu[PT_GMU_HFI_CTRL_STATUS / 4]);
++}
++
++/* GPU SMMU (dt: kgsl-iommu / arm,smmu-kgsl@5040000), register windows. */
++#define PT_SMMU_BASE            0x5040000u
++#define PT_SMMU_SIZE            0x10000u
++#define PT_SMMU_ID              (0x000u)        /* IDR0..IDR7 */
++#define PT_SMMU_SMR             (0x400u)        /* one per stream, 4 bytes */
++#define PT_SMMU_S2CR            (0x600u)
++#define PT_SMMU_CBAR            (0x800u)        /* one per context bank, 0x20 apart */
++#define PT_SMMU_CBA2R           (0xc00u)
++
++#define PT_HFI_TABLE_WORDS      0x100u          /* 1 KiB header: version..queues */
++#define PT_HFI_QUEUE_WORDS      0x400u          /* 4 KiB per queue */
++#define PT_HFI_QUEUES           3u
++#define PT_HFI_QUEUE_AT(n)      (0x1000u + 0x1000u * (n))
++#define PT_GMU_HFI_QTBL_ADDR    PT_GMU_WORD(0x5185u)
++#define PT_GMU_HFI_QTBL_INFO    PT_GMU_WORD(0x5184u)
++#define PT_GMU_HFI_CTRL_INIT    PT_GMU_WORD(0x5186u)
++
++static void
++pt_smmu_dump(volatile uint32_t *s)
++{
++	unsigned i;
++
++	printf("POLARIS GPU: smmu id %08x %08x %08x %08x\n",
++	    s[PT_SMMU_ID / 4], s[PT_SMMU_ID / 4 + 1], s[PT_SMMU_ID / 4 + 2], s[PT_SMMU_ID / 4 + 3]);
++	for (i = 0; i < 8; i += 4) {
++		printf("POLARIS GPU: smmu smr%d..%d %08x %08x %08x %08x\n", i, i + 3,
++		    s[PT_SMMU_SMR / 4 + i], s[PT_SMMU_SMR / 4 + i + 1],
++		    s[PT_SMMU_SMR / 4 + i + 2], s[PT_SMMU_SMR / 4 + i + 3]);
++	}
++	for (i = 0; i < 8; i += 4) {
++		printf("POLARIS GPU: smmu s2cr%d..%d %08x %08x %08x %08x\n", i, i + 3,
++		    s[PT_SMMU_S2CR / 4 + i], s[PT_SMMU_S2CR / 4 + i + 1],
++		    s[PT_SMMU_S2CR / 4 + i + 2], s[PT_SMMU_S2CR / 4 + i + 3]);
++	}
++	for (i = 0; i < 8; i++) {
++		printf("POLARIS GPU: smmu cb%d cbar=%08x cba2r=%08x\n", i,
++		    s[(PT_SMMU_CBAR + 0x20u * i) / 4], s[(PT_SMMU_CBA2R + 0x20u * i) / 4]);
++	}
++}
++
++static void
++pt_gpu_hfi_stage(void)
++{
++	volatile uint32_t *gmu;
++	volatile uint32_t *smmu;
++	volatile uint32_t *hfi;
++	uint64_t hfi_pa = 0;
++	uint32_t hfi_size = 0, i, status = 0;
++
++	PE_parse_boot_argn("hfimem_pa", &hfi_pa, sizeof(hfi_pa));
++	PE_parse_boot_argn("hfimem_size", &hfi_size, sizeof(hfi_size));
++	gmu = (volatile uint32_t *)ml_io_map(PT_GMU_BASE, 0x30000u);
++	smmu = (volatile uint32_t *)ml_io_map(PT_SMMU_BASE, PT_SMMU_SIZE);
++	if (gmu == NULL || smmu == NULL) {
++		printf("POLARIS GPU: stage 5 map failed (gmu=%p smmu=%p)\n", (void *)gmu, (void *)smmu);
++		return;
++	}
++	if (hfi_pa == 0 || hfi_size < 0x4000) {
++		printf("POLARIS GPU: stage 5 needs HFIMEM (pa=%#llx size=%u)\n",
++		    (unsigned long long)hfi_pa, hfi_size);
++		return;
++	}
++	hfi = (volatile uint32_t *)ml_io_map((vm_offset_t)hfi_pa, hfi_size);
++	if (hfi == NULL) {
++		printf("POLARIS GPU: stage 5 HFI map failed\n");
++		return;
++	}
++
++	printf("POLARIS GPU: stage 5 SMMU survey (read-only)\n");
++	pt_smmu_dump(smmu);
++
++	/* Build the HFI table the way the vendor's driver lays it out. */
++	for (i = 0; i < hfi_size / 4u; i++) {
++		hfi[i] = 0;
++	}
++	hfi[0] = 1;                                   /* version */
++	hfi[1] = PT_HFI_TABLE_WORDS;                  /* words in the header */
++	hfi[2] = 6;                                  /* first queue at word 6 */
++	hfi[3] = 16;                                 /* words per queue descriptor */
++	hfi[4] = PT_HFI_QUEUES;                      /* queues */
++	hfi[5] = PT_HFI_QUEUES;                      /* active queues */
++	for (i = 0; i < PT_HFI_QUEUES; i++) {
++		volatile uint32_t *q = hfi + 6 + 16 * i;
++
++		q[0] = 1;                             /* status: up */
++		q[1] = (uint32_t)(hfi_pa + PT_HFI_QUEUE_AT(i));  /* start, host address */
++		q[2] = i | ((i == 2 ? 40u : 10u) << 8);          /* type | priority */
++		q[3] = PT_HFI_QUEUE_WORDS;
++		q[8] = 0;                             /* read */
++		q[9] = 0;                             /* write */
++	}
++	printf("POLARIS GPU: stage 5 HFI table at %#llx, queues at +%#x/%#x/%#x\n",
++	    (unsigned long long)hfi_pa, PT_HFI_QUEUE_AT(0), PT_HFI_QUEUE_AT(1), PT_HFI_QUEUE_AT(2));
++
++	printf("POLARIS GPU: hfi_ctrl_status before=%08x\n", gmu[PT_GMU_HFI_CTRL_STATUS / 4]);
++	gmu[PT_GMU_HFI_QTBL_ADDR / 4] = (uint32_t)hfi_pa;
++	gmu[PT_GMU_HFI_QTBL_INFO / 4] = 1u;
++	gmu[PT_GMU_HFI_CTRL_INIT / 4] = 1u;
++	for (i = 0; i < 200u; i++) {
++		status = gmu[PT_GMU_HFI_CTRL_STATUS / 4];
++		if ((status & 1u) != 0u) {
++			break;
++		}
++		delay(1000);
++	}
++	printf("POLARIS GPU: hfi_ctrl_status after=%08x (bit0 = queues up) waited %u ms\n", status, i);
++	printf("POLARIS GPU: fw_init_result=%08x\n", gmu[PT_GMU_CM3_FW_INIT / 4]);
++	printf("POLARIS GPU: stage 5 done\n");
+ }
+ 
+ /*
