@@ -1,0 +1,58 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -367,6 +367,8 @@
+  * bring-up contract stages this. Values printed here are the input to the
+  * power-up step (stage 1), not a driver.
+  */
++static void pt_gpu_power_cx(void);
++
+ static void
+ pt_gpu_probe(void)
+ {
+@@ -389,7 +391,44 @@
+ 	    gpucc[0x10 / 4], gpucc[0x14 / 4], gpucc[0x18 / 4], gpucc[0x1c / 4]);
+ 	pt_gpucc = gpucc;
+ 	pt_gpu_on = 1;
+-	printf("POLARIS GPU: stage %u done (no writes); repeating every 5 s\n", want);
++	if (want >= 2u) {
++		pt_gpu_power_cx();
++	}
++	printf("POLARIS GPU: stage %u done; repeating every 5 s\n", want);
++}
++
++/*
++ * Stage 1: CX power domain on. Read-modify-write with a bounded poll and the
++ * value printed before and after each step, so a wrong guess still yields data
++ * instead of a silent hang.
++ */
++static void
++pt_gpu_power_cx(void)
++{
++	volatile uint32_t *g = pt_gpucc;
++	uint32_t v, now;
++	unsigned i;
++
++	if (g == NULL) {
++		return;
++	}
++	printf("POLARIS GPU: stage 2 cx power-up start\n");
++	v = g[0x106c / 4];
++	printf("POLARIS GPU: gdscr before %08x (collapse=%u)\n", v, v & 1u);
++	g[0x106c / 4] = v & ~1u;
++	for (i = 0; i < 100u; i++) {
++		now = g[0x106c / 4];
++		if ((now & 1u) == 0u) {
++			break;
++		}
++		delay(1000);
++	}
++	printf("POLARIS GPU: gdscr after %08x (waited %u ms)\n", now, i);
++	v = g[0x109c / 4];
++	printf("POLARIS GPU: cxo before %08x\n", v);
++	g[0x109c / 4] = v | 1u;
++	printf("POLARIS GPU: cxo after %08x\n", g[0x109c / 4]);
++	printf("POLARIS GPU: stage 2 cx done (GX and 3D core untouched)\n");
+ }
+ 
+ /*
