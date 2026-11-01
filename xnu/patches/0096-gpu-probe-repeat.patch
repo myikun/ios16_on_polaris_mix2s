@@ -1,0 +1,56 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -354,6 +354,11 @@
+ }
+ 
+ 
++static volatile uint32_t *pt_gpucc;
++static int pt_gpu_on;
++static unsigned pt_gpu_ticks;
++static unsigned pt_gpu_reports;
++
+ /*
+  * A-5 stage 0: read-only GPU clock/power state. Boot-arg polarisgpu=1.
+  *
+@@ -382,7 +387,28 @@
+ 	    gpucc[0x00 / 4], gpucc[0x04 / 4], gpucc[0x08 / 4], gpucc[0x0c / 4]);
+ 	printf("POLARIS GPU: cfg 0x10..0x1c %08x %08x %08x %08x\n",
+ 	    gpucc[0x10 / 4], gpucc[0x14 / 4], gpucc[0x18 / 4], gpucc[0x1c / 4]);
+-	printf("POLARIS GPU: stage %u done (no writes)\n", want);
++	pt_gpucc = gpucc;
++	pt_gpu_on = 1;
++	printf("POLARIS GPU: stage %u done (no writes); repeating every 5 s\n", want);
++}
++
++/*
++ * Compact repeat, so the values are still on screen after the boot log flood.
++ * Read-only: two lines, no writes to any GPU register.
++ */
++static void
++pt_gpu_report(void)
++{
++	volatile uint32_t *g = pt_gpucc;
++	if (g == NULL) {
++		return;
++	}
++	pt_gpu_reports++;
++	printf("\n=== POLARIS GPU #%u gdsc cx=%08x gx=%08x cx_hw=%08x ===\n",
++	    pt_gpu_reports, g[0x106c / 4], g[0x100c / 4], g[0x1540 / 4]);
++	printf("=== POLARIS GPU #%u rcg %08x %08x %08x %08x cfg %08x %08x %08x %08x ===\n",
++	    pt_gpu_reports, g[0x00 / 4], g[0x04 / 4], g[0x08 / 4], g[0x0c / 4],
++	    g[0x10 / 4], g[0x14 / 4], g[0x18 / 4], g[0x1c / 4]);
+ }
+ 
+ static void
+@@ -558,6 +584,10 @@
+ 					pt_x[slot] = x[slot]; pt_y[slot] = y[slot];
+ 				}
+ 			}
++			if (pt_gpu_on && ++pt_gpu_ticks >= 625u) {
++				pt_gpu_ticks = 0;
++				pt_gpu_report();
++			}
+ 			pt_wait(8);
+ 		}
+ 	} else {
