@@ -1,0 +1,92 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -369,6 +369,7 @@
+  */
+ static void pt_gpu_power_cx(void);
+ static void pt_gpu_gmu_survey(void);
++static void pt_gpu_gmu_firmware(void);
+ 
+ static void
+ pt_gpu_probe(void)
+@@ -398,6 +399,9 @@
+ 	if (want >= 3u) {
+ 		pt_gpu_gmu_survey();
+ 	}
++	if (want >= 4u) {
++		pt_gpu_gmu_firmware();
++	}
+ 	printf("POLARIS GPU: stage %u done; repeating every 5 s\n", want);
+ }
+ 
+@@ -550,6 +554,70 @@
+ 	    gmu[PT_GMU_CM3_CFG / 4], gmu[PT_GMU_CM3_FW_INIT / 4],
+ 	    gmu[PT_GMU_HFI_CTRL_STATUS / 4]);
+ 	printf("POLARIS GPU: stage 3 done (CM3 still in reset, nothing started)\n");
++}
++
++#define PT_GMU_ITCM             PT_GMU_WORD(0x0c00u)   /* the CM3's 16 KiB of code */
++
++/*
++ * Stage 4: the firmware. The image is the phone's own a630_gmu.bin, handed to us
++ * by the boot image (GMUFW in /chosen/memory-map). 32 KiB flat: no block header,
++ * no external allocations -- what MiCode's TCM_BOOT path writes.
++ */
++static void
++pt_gpu_gmu_firmware(void)
++{
++	volatile uint32_t *gmu;
++	const uint32_t *src;
++	uint64_t pa = 0;
++	uint32_t size = 0, i, bad = 0, result = 0;
++
++	PE_parse_boot_argn("gmufw_pa", &pa, sizeof(pa));
++	PE_parse_boot_argn("gmufw_size", &size, sizeof(size));
++	if (pa == 0 || size < 0x1000 || size > 0x8000 || (size & 3) != 0) {
++		printf("POLARIS GPU: no usable GMU firmware (pa=%#llx size=%u); pass gmufw_pa/gmufw_size\n",
++		    (unsigned long long)pa, size);
++		return;
++	}
++	gmu = (volatile uint32_t *)ml_io_map(PT_GMU_BASE, 0x30000u);
++	src = (const uint32_t *)ml_io_map((vm_offset_t)pa, size);
++	if (gmu == NULL || src == NULL) {
++		printf("POLARIS GPU: firmware map failed (gmu=%p src=%p)\n", (void *)gmu, (const void *)src);
++		return;
++	}
++	printf("POLARIS GPU: stage 4 loading %u bytes from %#llx into ITCM\n", size,
++	    (unsigned long long)pa);
++	printf("POLARIS GPU: cm3_sysreset before=%08x\n", gmu[PT_GMU_CM3_SYSRESET / 4]);
++
++	for (i = 0; i < size / 4u; i++) {
++		gmu[(PT_GMU_ITCM + 4u * i) / 4u] = src[i];
++	}
++	gmu[PT_GMU_CM3_CFG / 4] = 0x4052u;
++	gmu[PT_GMU_CM3_BOOT_CONFIG / 4] = 2u;
++	for (i = 0; i < size / 4u; i++) {
++		if (gmu[(PT_GMU_ITCM + 4u * i) / 4u] != src[i]) {
++			bad++;
++		}
++	}
++	printf("POLARIS GPU: ITCM readback: %u words, %u wrong\n", size / 4u, bad);
++	printf("POLARIS GPU: boot_cfg=%08x cfg=%08x\n",
++	    gmu[PT_GMU_CM3_BOOT_CONFIG / 4], gmu[PT_GMU_CM3_CFG / 4]);
++	if (bad != 0) {
++		printf("POLARIS GPU: firmware did not land; not starting the CM3\n");
++		return;
++	}
++
++	printf("POLARIS GPU: releasing CM3 reset\n");
++	gmu[PT_GMU_CM3_SYSRESET / 4] = 0u;
++	for (i = 0; i < 2000u; i++) {
++		result = gmu[PT_GMU_CM3_FW_INIT / 4];
++		if (result == 0xbabefaceu) {
++			break;
++		}
++		delay(1000);
++	}
++	printf("POLARIS GPU: fw_init_result=%08x after %u ms (babeface = firmware runs)\n",
++	    result, i);
++	printf("POLARIS GPU: hfi_ctrl_status=%08x\n", gmu[PT_GMU_HFI_CTRL_STATUS / 4]);
+ }
+ 
+ /*
