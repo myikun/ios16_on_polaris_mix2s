@@ -1,0 +1,98 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -368,6 +368,7 @@
+  * power-up step (stage 1), not a driver.
+  */
+ static void pt_gpu_power_cx(void);
++static void pt_gpu_gmu_survey(void);
+ 
+ static void
+ pt_gpu_probe(void)
+@@ -394,6 +395,9 @@
+ 	if (want >= 2u) {
+ 		pt_gpu_power_cx();
+ 	}
++	if (want >= 3u) {
++		pt_gpu_gmu_survey();
++	}
+ 	printf("POLARIS GPU: stage %u done; repeating every 5 s\n", want);
+ }
+ 
+@@ -429,6 +433,76 @@
+ 	g[0x109c / 4] = v | 1u;
+ 	printf("POLARIS GPU: cxo after %08x\n", g[0x109c / 4]);
+ 	printf("POLARIS GPU: stage 2 cx done (GX and 3D core untouched)\n");
++}
++
++#define PT_GPUCC_AHB            0x1078u
++#define PT_GPUCC_CX_GMU         0x1098u
++#define PT_GPUCC_CXO            0x109cu
++#define PT_GPUCC_GMU_RCGR       0x1120u
++#define PT_GPUCC_GX_GDSCR       0x100cu
++#define PT_GPUCC_GX_SW_RESET    0x1008u
++#define PT_GPUCC_SMMU_VOTE      0x5000u
++#define PT_GMU_BASE             0x506a000u
++
++/* GMU registers, word indexed from the GMU base (A6xx a6xx_gmu.xml). */
++#define PT_GMU_WORD(n)          ((n) * 4u)
++#define PT_GMU_CM3_SYSRESET     PT_GMU_WORD(0x5000u)
++#define PT_GMU_CM3_BOOT_CONFIG  PT_GMU_WORD(0x5001u)
++#define PT_GMU_CM3_FW_INIT      PT_GMU_WORD(0x501cu)
++#define PT_GMU_CM3_CFG          PT_GMU_WORD(0x502du)
++#define PT_GMU_HFI_CTRL_STATUS  PT_GMU_WORD(0x5180u)
++
++/*
++ * Stage 2: gpu_cc_ahb_clk on, then look at the GMU. The CM3 stays in reset: this
++ * stage only proves the block answers and records what it holds, so a wrong
++ * guess here cannot leave the GPU half-started.
++ */
++static void
++pt_gpu_gmu_survey(void)
++{
++	volatile uint32_t *g = pt_gpucc;
++	volatile uint32_t *gmu;
++	uint32_t v, ahb;
++
++	gmu = (volatile uint32_t *)ml_io_map(PT_GMU_BASE, 0x30000u);
++	if (gmu == NULL) {
++		printf("POLARIS GPU: GMU map failed\n");
++		return;
++	}
++	printf("POLARIS GPU: stage 3 survey, GMU=%p\n", (void *)gmu);
++	printf("POLARIS GPU: gpucc ahb=%08x cx_gmu=%08x cxo=%08x\n",
++	    g[PT_GPUCC_AHB / 4], g[PT_GPUCC_CX_GMU / 4], g[PT_GPUCC_CXO / 4]);
++	printf("POLARIS GPU: gmu_rcgr cmd=%08x cfg=%08x\n",
++	    g[PT_GPUCC_GMU_RCGR / 4], g[PT_GPUCC_GMU_RCGR / 4 + 1]);
++	printf("POLARIS GPU: gx_gdscr=%08x gx_sw_reset=%08x smmu_vote=%08x\n",
++	    g[PT_GPUCC_GX_GDSCR / 4], g[PT_GPUCC_GX_SW_RESET / 4], g[PT_GPUCC_SMMU_VOTE / 4]);
++
++	/* gpu_cc_ahb_clk: the register bus inside the GPU block. */
++	ahb = g[PT_GPUCC_AHB / 4];
++	if ((ahb & 1u) == 0u) {
++		g[PT_GPUCC_AHB / 4] = ahb | 1u;
++		for (int i = 0; i < 50; i++) {
++			ahb = g[PT_GPUCC_AHB / 4];
++			if ((ahb & (1u << 31)) == 0u) {
++				break;
++			}
++			delay(1000);
++		}
++	}
++	printf("POLARIS GPU: ahb after=%08x (off bit clear means it runs)\n", g[PT_GPUCC_AHB / 4]);
++
++	/* CXO feeds the GMU's timers; leave it gated on if it already is. */
++	v = g[PT_GPUCC_CXO / 4];
++	if ((v & 1u) == 0u) {
++		g[PT_GPUCC_CXO / 4] = v | 1u;
++	}
++	printf("POLARIS GPU: cxo after=%08x\n", g[PT_GPUCC_CXO / 4]);
++
++	printf("POLARIS GPU: gmu cm3_sysreset=%08x boot_cfg=%08x cfg=%08x fw_init=%08x hfi=%08x\n",
++	    gmu[PT_GMU_CM3_SYSRESET / 4], gmu[PT_GMU_CM3_BOOT_CONFIG / 4],
++	    gmu[PT_GMU_CM3_CFG / 4], gmu[PT_GMU_CM3_FW_INIT / 4],
++	    gmu[PT_GMU_HFI_CTRL_STATUS / 4]);
++	printf("POLARIS GPU: stage 3 done (CM3 still in reset, nothing started)\n");
+ }
+ 
+ /*
