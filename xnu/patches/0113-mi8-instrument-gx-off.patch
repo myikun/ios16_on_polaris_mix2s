@@ -1,0 +1,13 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2383,6 +2383,9 @@
+ 		printf("mi8gpu: the 3D core's address space is not ready; the CP is not started\n");
+ 		return;
+ 	}
++	printf("mi8gpu: before the first 3D register read: GX GDSCR %#010x clamp %#010x GX_SW_RESET %#010x\n",
++	    rd(gpucc + 0x100c), rd(gpucc + 0x1508), rd(gpucc + 0x1008));
++	printf("mi8gpu: reading CP_SQE_CNTL (0x5000020) now; if this is the last line, that read stalls\n");
+ 	/* GX registers survive a slumber (EXP-0108: HWCG was still on): make sure the CP of an earlier run is halted first */
+ 	printf("mi8gpu: CP_SQE_CNTL was %#x, RB_RPTR %u WPTR %u; halting it before the setup\n", rd(gpu3d + 4 * 0x0808), rd(gpu3d + 4 * 0x0806), rd(gpu3d + 4 * 0x0807));
+ 	gpu_put(0x0808, 0, "REG_A6XX_CP_SQE_CNTL (halt)");
