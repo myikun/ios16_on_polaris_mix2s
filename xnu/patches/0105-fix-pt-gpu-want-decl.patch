@@ -1,0 +1,20 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -356,6 +356,7 @@
+ 
+ static volatile uint32_t *pt_gpucc;
+ static int pt_gpu_on;
++static uint32_t pt_gpu_want;        /* the boot-arg value, for the sub-stages */
+ static unsigned pt_gpu_ticks;
+ static unsigned pt_gpu_reports;
+ 
+@@ -633,8 +634,6 @@
+ #define PT_SMMU_S2CR            (0x600u)
+ #define PT_SMMU_CBAR            (0x800u)        /* one per context bank, 0x20 apart */
+ #define PT_SMMU_CBA2R           (0xc00u)
+-
+-static uint32_t pt_gpu_want;          /* the boot-arg value, for the sub-stages */
+ 
+ #define PT_HFI_TABLE_WORDS      0x100u          /* 1 KiB header: version..queues */
+ #define PT_HFI_QUEUE_WORDS      0x400u          /* 4 KiB per queue */
