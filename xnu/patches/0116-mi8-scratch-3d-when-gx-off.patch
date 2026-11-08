@@ -1,0 +1,34 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2215,6 +2215,30 @@
+ static vm_offset_t
+ gpu_map(void)
+ {
++	static vm_offset_t scratch;
++	static bool said;
++
++	/*
++	 * A 3D register access while GX is unpowered never returns and takes the bus
++	 * with it. GPUCC is always readable, so ask it first and run the remaining
++	 * steps against a scratch page instead of stalling.
++	 */
++	if ((rd(gpucc + 0x100c) & (1u << 31)) == 0) {
++		if (!said) {
++			said = true;
++			printf("mi8gpu: GX GDSCR %#010x has no power: 3D accesses go to a scratch page\n",
++			    rd(gpucc + 0x100c));
++		}
++		if (scratch == 0) {
++			if (kmem_alloc(kernel_map, &scratch, 0x10000, KMA_ZERO | KMA_DATA,
++			    VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++				scratch = 0;
++			}
++		}
++		if (scratch != 0) {
++			return scratch;
++		}
++	}
+ 	if (gpu3d == 0) {
+ 		gpu3d = ml_io_map(GPU_PHYS, GPU_SIZE);
+ 	}
