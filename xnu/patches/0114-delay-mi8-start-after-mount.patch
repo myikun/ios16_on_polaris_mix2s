@@ -1,0 +1,22 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -380,7 +380,17 @@
+ {
+ 	uint32_t want = 0;
+ 	PE_parse_boot_argn("polarisgpu", &want, sizeof(want));
+-	/* the ported A630 driver runs on its own thread when mi8gpu=N is given */
++	/*
++	 * The ported A630 driver runs on its own thread when mi8gpu=N is given, but
++	 * only after the root volume is mounted: the console ring is written to disk
++	 * by a thread that starts then, and a stalled 3D read before that would leave
++	 * no log at all (which is exactly what happened).
++	 */
++	if (PE_parse_boot_argn("mi8gpu", &want, sizeof(want)) && want != 0) {
++		printf("POLARIS GPU: holding the ported driver for 15 s\n");
++		pt_wait(15000);
++		printf("POLARIS GPU: starting the ported driver now\n");
++	}
+ 	mi8_adreno_init();
+ 	pt_gpu_want = want;
+ 	if (want == 0) {
