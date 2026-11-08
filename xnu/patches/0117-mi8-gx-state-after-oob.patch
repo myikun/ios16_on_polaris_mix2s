@@ -1,0 +1,14 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -3997,6 +3997,10 @@
+ 				bool gpu_set = gmu_oob_set(OOB_GPU_SET, OOB_GPU_SET_ACK);
+ 
+ 				gmu_power_look(gpu_set ? "GPU_SET acknowledged" : "GPU_SET NOT acknowledged");
++				/* GPUCC stays readable no matter what GX does: this says whether the GMU really
++				 * powered the 3D core before anything touches 0x5000000. */
++				printf("mi8gpu: GX GDSCR %#010x clamp %#010x GX_SW_RESET %#010x after OOB_GPU_SET (bit31 = powered)\n",
++				    rd(gpucc + 0x100c), rd(gpucc + 0x1508), rd(gpucc + 0x1008));
+ 				if (gpu_set && gmu_last_step >= 18) {
+ 					gpu_look();
+ 				}
