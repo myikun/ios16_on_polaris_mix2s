@@ -1,0 +1,115 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -372,6 +372,7 @@
+ static void pt_gpu_gmu_survey(void);
+ static void pt_gpu_gmu_firmware(void);
+ static void pt_gpu_hfi_stage(void);
++static void pt_gpu_smmu_stage(void);
+ 
+ static void
+ pt_gpu_probe(void)
+@@ -402,6 +403,9 @@
+ 	if (want >= 3u) {
+ 		pt_gpu_gmu_survey();
+ 	}
++	if (want >= 6u) {
++		pt_gpu_smmu_stage();
++	}
+ 	if (want >= 4u) {
+ 		pt_gpu_gmu_firmware();
+ 	}
+@@ -666,39 +670,16 @@
+ 	}
+ }
+ 
+-static void
+-pt_gpu_hfi_stage(void)
+-{
+-	volatile uint32_t *gmu;
+-	volatile uint32_t *smmu = NULL;
++/*
++ * Stage 6: the GPU SMMU. Read while the GMU is still in reset -- the dipper
++ * port's order -- because once its firmware runs it owns the GPU bus and an
++ * APPS access to the SMMU does not come back.
++ */
++static void
++pt_gpu_smmu_stage(void)
++{
++	volatile uint32_t *smmu;
+ 	volatile uint32_t *gcc;
+-	volatile uint32_t *hfi;
+-	uint64_t hfi_pa = 0;
+-	uint32_t hfi_size = 0, i, status = 0;
+-
+-	PE_parse_boot_argn("hfimem_pa", &hfi_pa, sizeof(hfi_pa));
+-	PE_parse_boot_argn("hfimem_size", &hfi_size, sizeof(hfi_size));
+-	gmu = (volatile uint32_t *)ml_io_map(PT_GMU_BASE, 0x30000u);
+-	if (gmu == NULL) {
+-		printf("POLARIS GPU: stage 5 map failed (gmu=%p)\n", (void *)gmu);
+-		return;
+-	}
+-	if (hfi_pa == 0 || hfi_size < 0x4000) {
+-		printf("POLARIS GPU: stage 5 needs HFIMEM (pa=%#llx size=%u)\n",
+-		    (unsigned long long)hfi_pa, hfi_size);
+-		return;
+-	}
+-	hfi = (volatile uint32_t *)ml_io_map((vm_offset_t)hfi_pa, hfi_size);
+-	if (hfi == NULL) {
+-		printf("POLARIS GPU: stage 5 HFI map failed\n");
+-		return;
+-	}
+-
+-	/*
+-	 * The SMMU window is XPU-protected from the APPS domain: touching it while its
+-	 * clocks are off resets the SoC without a word. Only stage 6 asks for it.
+-	 */
+-	if (pt_gpu_want >= 6u) {
+ 		uint32_t vote = 0;
+ 
+ 		/* The SMMU's own clocks, from GCC, plus the GPUCC vote for its bus. */
+@@ -750,10 +731,40 @@
+ 			printf("POLARIS GPU: stage 6 SMMU survey (read-only, XPU risk)\n");
+ 			pt_smmu_dump(smmu);
+ 		}
+-	} else {
+-		printf("POLARIS GPU: stage 5 skips the SMMU (stage 6 asks for it)\n");
+-	}
+-
++	/* let these values reach disk before whatever comes next can reset the SoC */
++	printf("POLARIS GPU: stage 6 waiting 4 s so the SMMU values are flushed\n");
++	pt_wait(4000);
++}
++
++static void
++pt_gpu_hfi_stage(void)
++{
++	volatile uint32_t *gmu;
++	volatile uint32_t *smmu = NULL;
++	volatile uint32_t *gcc;
++	volatile uint32_t *hfi;
++	uint64_t hfi_pa = 0;
++	uint32_t hfi_size = 0, i, status = 0;
++
++	PE_parse_boot_argn("hfimem_pa", &hfi_pa, sizeof(hfi_pa));
++	PE_parse_boot_argn("hfimem_size", &hfi_size, sizeof(hfi_size));
++	gmu = (volatile uint32_t *)ml_io_map(PT_GMU_BASE, 0x30000u);
++	if (gmu == NULL) {
++		printf("POLARIS GPU: stage 5 map failed (gmu=%p)\n", (void *)gmu);
++		return;
++	}
++	if (hfi_pa == 0 || hfi_size < 0x4000) {
++		printf("POLARIS GPU: stage 5 needs HFIMEM (pa=%#llx size=%u)\n",
++		    (unsigned long long)hfi_pa, hfi_size);
++		return;
++	}
++	hfi = (volatile uint32_t *)ml_io_map((vm_offset_t)hfi_pa, hfi_size);
++	if (hfi == NULL) {
++		printf("POLARIS GPU: stage 5 HFI map failed\n");
++		return;
++	}
++
++	printf("POLARIS GPU: the SMMU was handled before the firmware (stage 6)\n");
+ 	/* Build the HFI table the way the vendor's driver lays it out. */
+ 	for (i = 0; i < hfi_size / 4u; i++) {
+ 		hfi[i] = 0;
