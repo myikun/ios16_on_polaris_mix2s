@@ -1,0 +1,40 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -552,7 +552,7 @@
+ 	 * thread with it, and only what is already on disk survives.
+ 	 */
+ 	printf("POLARIS GPU: waiting 12 s before the first GMU read\n");
+-	pt_wait(12000);
++	pt_wait(3000);
+ 
+ 	printf("POLARIS GPU: first GMU read now\n");
+ 	printf("POLARIS GPU: gmu cm3_sysreset=%08x boot_cfg=%08x cfg=%08x fw_init=%08x hfi=%08x\n",
+@@ -720,6 +720,12 @@
+ 		}
+ 		printf("POLARIS GPU: stage 6 smmu_vote=%08x\n", pt_gpucc[PT_GPUCC_SMMU_VOTE / 4]);
+ 
++		/* gpu_cc_hub_clk_src: without a parent these gates cannot come up. */
++		pt_gpucc[0x117c / 4 + 1] = (5u << 8) | 2u;
++		pt_gpucc[0x117c / 4] = 1u;
++		printf("POLARIS GPU: stage 6 hub_rcgr cmd=%08x cfg=%08x\n",
++		    pt_gpucc[0x117c / 4], pt_gpucc[0x117c / 4 + 1]);
++
+ 		/* The GPU block's bus-side clocks: Linux keeps these three always on. */
+ 		{
+ 			static const uint32_t off[3] = { 0x1170u, 0x1178u, 0x1204u };
+@@ -731,11 +737,12 @@
+ 				if ((clk & 1u) == 0u) {
+ 					pt_gpucc[off[i] / 4] = clk | 1u;
+ 				}
+-				printf("POLARIS GPU: stage 6 %s=%08x\n", name[i], pt_gpucc[off[i] / 4]);
++				printf("POLARIS GPU: stage 6 %s=%08x (off bit clear = running)\n", name[i],
++				    pt_gpucc[off[i] / 4]);
+ 			}
+ 		}
+ 		printf("POLARIS GPU: stage 6 waiting 8 s before the first SMMU read\n");
+-		pt_wait(8000);
++		pt_wait(3000);
+ 		smmu = (volatile uint32_t *)ml_io_map(PT_SMMU_BASE, PT_SMMU_SIZE);
+ 		if (smmu == NULL) {
+ 			printf("POLARIS GPU: stage 6 SMMU map failed\n");
