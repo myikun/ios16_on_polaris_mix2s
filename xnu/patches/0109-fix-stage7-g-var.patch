@@ -1,0 +1,19 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -726,12 +726,12 @@
+ 			static const char *name[3] = { "cb", "hub_aon", "hub_cx_int" };
+ 
+ 			for (int i = 0; i < 3; i++) {
+-				uint32_t clk = g[off[i] / 4];
++				uint32_t clk = pt_gpucc[off[i] / 4];
+ 
+ 				if ((clk & 1u) == 0u) {
+-					g[off[i] / 4] = clk | 1u;
++					pt_gpucc[off[i] / 4] = clk | 1u;
+ 				}
+-				printf("POLARIS GPU: stage 6 %s=%08x\n", name[i], g[off[i] / 4]);
++				printf("POLARIS GPU: stage 6 %s=%08x\n", name[i], pt_gpucc[off[i] / 4]);
+ 			}
+ 		}
+ 		printf("POLARIS GPU: stage 6 waiting 8 s before the first SMMU read\n");
