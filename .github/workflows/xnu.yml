@@ -37,7 +37,7 @@ env:
 jobs:
   build:
     # macos-14 was retired on 2026-11-02; macos-15 ships Xcode 16, whose iig
-    # emits IORPC.kernelContent -- patch 0104/0128 adds that field to xnu-8796.
+    # emits IORPC.kernelContent -- patch 0104 adds that field to xnu-8796.
     runs-on: macos-15
     timeout-minutes: 120
     steps:
@@ -62,10 +62,6 @@ jobs:
           # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
           sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
           grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
-          # build.sh exports CC/CXX itself, so wrap the compiler with ccache there
-          sed -i '' 's|export CC="$(xcrun -find clang)"|export CC="ccache $(xcrun -find clang)"|' dxb/build.sh
-          sed -i '' 's|export CXX="$(xcrun -find clang++)"|export CXX="ccache $(xcrun -find clang++)"|' dxb/build.sh
-          grep -n 'export CC=\|export CXX=' dxb/build.sh
           ls dxb/patches
 
       - name: Deps
@@ -82,6 +78,18 @@ jobs:
           xcodebuild -version
           xcrun --find iig
           ccache --version | head -1
+          # ccache: xcodebuild cannot spawn a compiler given as "ccache clang"
+          # (two words), so give it one executable path instead: a wrapper.
+          CLANG=$(xcrun -find clang)
+          CLANGXX=$(xcrun -find clang++)
+          printf '#!/bin/sh\nexec ccache %s "$@"\n' "$CLANG"   | sudo tee /usr/local/bin/cc-clang    >/dev/null
+          printf '#!/bin/sh\nexec ccache %s "$@"\n' "$CLANGXX" | sudo tee /usr/local/bin/cc-clang++  >/dev/null
+          sudo chmod +x /usr/local/bin/cc-clang /usr/local/bin/cc-clang++
+          # build.sh exports CC/CXX itself, so rewrite those two lines
+          sed -i '' 's|^\( *\)export CC=.*|\1export CC="/usr/local/bin/cc-clang"|' dxb/build.sh
+          sed -i '' 's|^\( *\)export CXX=.*|\1export CXX="/usr/local/bin/cc-clang++"|' dxb/build.sh
+          grep -n 'export CC=\|export CXX=' dxb/build.sh
+          /usr/local/bin/cc-clang --version | head -2
 
       - name: Build
         working-directory: dxb
