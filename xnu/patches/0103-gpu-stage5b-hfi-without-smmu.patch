@@ -1,0 +1,65 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -377,6 +377,7 @@
+ {
+ 	uint32_t want = 0;
+ 	PE_parse_boot_argn("polarisgpu", &want, sizeof(want));
++	pt_gpu_want = want;
+ 	if (want == 0) {
+ 		return;
+ 	}
+@@ -633,6 +634,8 @@
+ #define PT_SMMU_CBAR            (0x800u)        /* one per context bank, 0x20 apart */
+ #define PT_SMMU_CBA2R           (0xc00u)
+ 
++static uint32_t pt_gpu_want;          /* the boot-arg value, for the sub-stages */
++
+ #define PT_HFI_TABLE_WORDS      0x100u          /* 1 KiB header: version..queues */
+ #define PT_HFI_QUEUE_WORDS      0x400u          /* 4 KiB per queue */
+ #define PT_HFI_QUEUES           3u
+@@ -668,7 +671,7 @@
+ pt_gpu_hfi_stage(void)
+ {
+ 	volatile uint32_t *gmu;
+-	volatile uint32_t *smmu;
++	volatile uint32_t *smmu = NULL;
+ 	volatile uint32_t *hfi;
+ 	uint64_t hfi_pa = 0;
+ 	uint32_t hfi_size = 0, i, status = 0;
+@@ -676,9 +679,8 @@
+ 	PE_parse_boot_argn("hfimem_pa", &hfi_pa, sizeof(hfi_pa));
+ 	PE_parse_boot_argn("hfimem_size", &hfi_size, sizeof(hfi_size));
+ 	gmu = (volatile uint32_t *)ml_io_map(PT_GMU_BASE, 0x30000u);
+-	smmu = (volatile uint32_t *)ml_io_map(PT_SMMU_BASE, PT_SMMU_SIZE);
+-	if (gmu == NULL || smmu == NULL) {
+-		printf("POLARIS GPU: stage 5 map failed (gmu=%p smmu=%p)\n", (void *)gmu, (void *)smmu);
++	if (gmu == NULL) {
++		printf("POLARIS GPU: stage 5 map failed (gmu=%p)\n", (void *)gmu);
+ 		return;
+ 	}
+ 	if (hfi_pa == 0 || hfi_size < 0x4000) {
+@@ -692,8 +694,21 @@
+ 		return;
+ 	}
+ 
+-	printf("POLARIS GPU: stage 5 SMMU survey (read-only)\n");
+-	pt_smmu_dump(smmu);
++	/*
++	 * The SMMU window is XPU-protected from the APPS domain: touching it while its
++	 * clocks are off resets the SoC without a word. Only stage 6 asks for it.
++	 */
++	if (pt_gpu_want >= 6u) {
++		smmu = (volatile uint32_t *)ml_io_map(PT_SMMU_BASE, PT_SMMU_SIZE);
++		if (smmu == NULL) {
++			printf("POLARIS GPU: stage 6 SMMU map failed\n");
++		} else {
++			printf("POLARIS GPU: stage 6 SMMU survey (read-only, XPU risk)\n");
++			pt_smmu_dump(smmu);
++		}
++	} else {
++		printf("POLARIS GPU: stage 5 skips the SMMU (stage 6 asks for it)\n");
++	}
+ 
+ 	/* Build the HFI table the way the vendor's driver lays it out. */
+ 	for (i = 0; i < hfi_size / 4u; i++) {
