@@ -1,0 +1,40 @@
+diff --git a/bsd/dev/polaris_touch_i2c.c b/bsd/dev/polaris_touch_i2c.c
+--- a/bsd/dev/polaris_touch_i2c.c
++++ b/bsd/dev/polaris_touch_i2c.c
+@@ -671,6 +671,7 @@
+ {
+ 	volatile uint32_t *gmu;
+ 	volatile uint32_t *smmu = NULL;
++	volatile uint32_t *gcc;
+ 	volatile uint32_t *hfi;
+ 	uint64_t hfi_pa = 0;
+ 	uint32_t hfi_size = 0, i, status = 0;
+@@ -698,6 +699,28 @@
+ 	 * clocks are off resets the SoC without a word. Only stage 6 asks for it.
+ 	 */
+ 	if (pt_gpu_want >= 6u) {
++		uint32_t vote = 0;
++
++		/* The SMMU's own clocks, from GCC, plus the GPUCC vote for its bus. */
++		gcc = (volatile uint32_t *)ml_io_map(PT_GCC_BASE, 0x80000u);
++		if (gcc != NULL) {
++			gcc[PT_GCC_GPU_CFG_AHB / 4] |= 1u;
++			gcc[0x7100c / 4] |= 1u;
++			gcc[0x71018 / 4] |= 1u;
++			gcc[0x44038 / 4] |= 1u;
++			printf("POLARIS GPU: stage 6 gcc cfg_ahb=%08x memnoc=%08x snoc=%08x ddrss=%08x\n",
++			    gcc[PT_GCC_GPU_CFG_AHB / 4], gcc[0x7100c / 4],
++			    gcc[0x71018 / 4], gcc[0x44038 / 4]);
++		} else {
++			printf("POLARIS GPU: stage 6 gcc map failed\n");
++		}
++		vote = g[PT_GPUCC_SMMU_VOTE / 4];
++		if ((vote & 1u) == 0u) {
++			g[PT_GPUCC_SMMU_VOTE / 4] = vote | 1u;
++		}
++		printf("POLARIS GPU: stage 6 smmu_vote=%08x\n", g[PT_GPUCC_SMMU_VOTE / 4]);
++		printf("POLARIS GPU: stage 6 waiting 8 s before the first SMMU read\n");
++		pt_wait(8000);
+ 		smmu = (volatile uint32_t *)ml_io_map(PT_SMMU_BASE, PT_SMMU_SIZE);
+ 		if (smmu == NULL) {
+ 			printf("POLARIS GPU: stage 6 SMMU map failed\n");
