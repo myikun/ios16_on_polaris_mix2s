@@ -1,0 +1,50 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2753,9 +2753,18 @@
+ {
+ #define BR(v_) (ring[(*w)++ & 8191u] = (v_))
+ 	blit_setup(ring, w, 0, false);
++	{
++		uint32_t blt = (0xfu << 20) | (FMT6_8_8_8_8_UNORM << 8) |
++		    ((v & 3u) << 24) | (((v & 4u) != 0) ? (1u << 30) : 0u);
++
++		BR(pkt4(REG_RB_A2D_BLT_CNTL, 1));
++		BR(blt);
++		BR(pkt4(REG_GRAS_A2D_BLT_CNTL, 1));
++		BR(blt);
++	}
+ 	BR(pkt4(REG_TPL1_A2D_SRC_TEXTURE_INFO, 5));
+ 	BR(FMT6_8_8_8_8_UNORM | (1u << 20) | (1u << 22));      /* LINEAR, WZYX */
+-	BR((v & 1u) ? ((w_ - 1) | ((h_ - 1) << 15)) : (w_ | (h_ << 15)));
++	BR(w_ | (h_ << 15));                                    /* WIDTH, HEIGHT */
+ 	BR((uint32_t)src);
+ 	BR((uint32_t)(src >> 32));
+ 	BR((spitch >> 6) << 9);                                 /* PITCH in 64-byte units, bits 9..23 */
+@@ -2764,7 +2773,7 @@
+ 	BR((w_ - 1) << 8);
+ 	BR(0);
+ 	BR((h_ - 1) << 8);
+-	blit_rect_solid(ring, w, dst, dpitch, 0, 0, w_ - 1, h_ - 1, (v & 2u) != 0);
++	blit_rect_solid(ring, w, dst, dpitch, 0, 0, w_ - 1, h_ - 1, false);
+ #undef BR
+ }
+ 
+@@ -2793,14 +2802,14 @@
+ 	}
+ 	to_memory(g3d_regions[4].memory, 8u << 20);
+ 
+-	for (uint32_t var = 0; var < 4; var++) {
++	for (uint32_t var = 0; var < 6; var++) {
+ 		for (uint32_t i = 0; i < (4u << 20) / 4u; i++) {
+ 			dst[i] = 0;
+ 		}
+ 		to_memory(g3d_regions[4].memory + (4u << 20), 4u << 20);
+ 		w = cp_wptr & 8191u;
+-		printf("mi8gpu: A2D copy variant %u (%s size, %s WFI) %ux%u src %#llx dst %#llx\n",
+-		    var, (var & 1u) ? "w-1" : "w", (var & 2u) ? "with" : "no", w_, h_, src_iova, dst_iova);
++		printf("mi8gpu: A2D copy variant %u (ifmt %u%s) %ux%u src %#llx dst %#llx\n",
++		    var, var & 3u, (var & 4u) ? " + COPY" : "", w_, h_, src_iova, dst_iova);
+ 		blit_copy_rect(ring, &w, src_iova, pitch, dst_iova, pitch, w_, h_, var);
+ 		ring[w++ & 8191u] = pkt7(CP_EVENT_WRITE_OPCODE, 1);
+ 		ring[w++ & 8191u] = EV_CACHE_FLUSH_TS;
