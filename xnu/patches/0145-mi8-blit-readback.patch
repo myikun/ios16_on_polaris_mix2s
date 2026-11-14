@@ -1,0 +1,29 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2745,7 +2745,8 @@
+ 	uint32_t w = cp_wptr & 8191u;
+ 	uint64_t base = G3D_FB_IOVA;
+ 	uint32_t pitch = G3D_FB_WIDTH * 4u;
+-	uint32_t lines = G3D_FB_HEIGHT;
++	uint32_t lines = (vinfo.v_height != 0 && vinfo.v_height < G3D_FB_HEIGHT) ?
++	    vinfo.v_height : G3D_FB_HEIGHT;
+ 
+ 	printf("mi8gpu: A2D fill %08x at iova %#llx pitch %u lines %u (ring wptr %u)\n",
+ 	    rgba, base, pitch, lines, w);
+@@ -2774,6 +2775,15 @@
+ 		printf("mi8gpu: A2D fill %s: RB_RPTR %u WPTR %u, RBBM_STATUS %#x CP_HW_FAULT %#x INT_0 %#x\n",
+ 		    done ? "consumed" : "NOT consumed", rptr, w & 8191u,
+ 		    rd(gpu3d + 4 * 0x0210), rd(gpu3d + 4 * 0x0821), rd(gpu3d + 4 * 0x0201));
++		/* Did the GPU really write it? Read the panel back at once (write-combining: no cache). */
++		{
++			volatile uint32_t *fb = (volatile uint32_t *)vinfo.v_baseaddr;
++
++			if (vinfo.v_baseaddr != 0) {
++				printf("mi8gpu: A2D panel now: %08x %08x %08x %08x %08x %08x %08x %08x (wanted %08x)\n",
++				    fb[0], fb[1], fb[2], fb[3], fb[4], fb[5], fb[6], fb[7], rgba);
++			}
++		}
+ 		return done;
+ 	}
+ }
