@@ -1,0 +1,22 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2407,7 +2407,8 @@
+ 	printf("mi8gpu: reading CP_SQE_CNTL (0x5000020) now; if this is the last line, that read stalls\n");
+ 	/* GX registers survive a slumber (EXP-0108: HWCG was still on): make sure the CP of an earlier run is halted first */
+ 	{
+-		printf("mi8gpu: CP_SQE_CNTL was %#x, RB_RPTR %u WPTR %u; setup begins\n",
++		printf("mi8gpu: PROBE-BUILD-5 (2.5 s per marker)\n");
++	printf("mi8gpu: CP_SQE_CNTL was %#x, RB_RPTR %u WPTR %u; setup begins\n",
+ 		    rd(gpu3d + 4 * 0x0808), rd(gpu3d + 4 * 0x0806), rd(gpu3d + 4 * 0x0807));
+ 		uint32_t stop = 0, n = 0;
+ 
+@@ -2415,7 +2416,7 @@
+ #define PT_CP_MARK(text) do { \
+ 			n++; \
+ 			printf("mi8gpu: cp %u of 7: " text "\n", n); \
+-			for (int f = 0; f < 12; f++) { \
++			for (int f = 0; f < 25; f++) { \
+ 				sleep_us(100000); \
+ 			} \
+ 			if (stop != 0 && n >= stop) { \
