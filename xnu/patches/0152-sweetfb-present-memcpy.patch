@@ -1,0 +1,35 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -126,1 +126,2 @@
+ 	bool          fMapValid;
++	bool          fMapConsecutive;  /* fXMap[i] == fXMap[0] + i: row copy instead of a gather */
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -356,2 +356,9 @@
+ 	fMapPx1 = px1;
++	fMapConsecutive = true;
++	for (i = 1; i < px1 - px0; i++) {
++		if (fXMap[i] != fXMap[0] + i) {
++			fMapConsecutive = false;
++			break;
++		}
++	}
+ 	fMapValid = true;
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -512,4 +512,9 @@
+-				const uint16_t *map = fXMap;
+-				for (int32_t i = 0; i < count; i++) {
+-					drow[i] = srow[map[i]];
++				if (fMapConsecutive) {
++					/* the map is base + i: the row is a straight copy */
++					memcpy(drow, &srow[fXMap[0]], (size_t)count * sizeof(uint32_t));
++				} else {
++					const uint16_t *map = fXMap;
++					for (int32_t i = 0; i < count; i++) {
++						drow[i] = srow[map[i]];
++					}
+ 				}
