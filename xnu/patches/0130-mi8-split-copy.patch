@@ -1,0 +1,49 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1219,10 +1219,14 @@
+ #define GS_US(since) ({ uint64_t _ns; \
+ 	absolutetime_to_nanoseconds(mach_absolute_time() - (since), &_ns); _ns / 1000; })
+ #define GS_MARK(text) do { \
++		uint32_t nw_ = 0; \
+ 		printf("mi8gpu: gs: " text "\n"); \
+-		for (int f = 0; f < 25; f++) { \
+-			sleep_us(100000); \
++		if (!(PE_parse_boot_argn("mi8gpu_nowait", &nw_, sizeof(nw_)) && nw_)) { \
++			for (int f = 0; f < 25; f++) { \
++				sleep_us(100000); \
++			} \
+ 		} \
++		printf("mi8gpu: gs: " text " [wait done]\n"); \
+ 	} while (0)
+ 	printf("mi8gpu: PROBE-BUILD-6 (g3d_smmu_setup markers)\n");
+ 	GS_MARK("a: tables for the 3D address space");
+@@ -1247,11 +1251,23 @@
+ 		    g3d_regions[r].memory, kvtophys(g3d_regions[r].memory));
+ 	}
+ 	GS_MARK("b: buffers allocated, copying the SQE microcode");
+-	printf("mi8gpu: gs1: copying %llu bytes to %#lx (phys %#llx)\n", fw_size - G3D_SQE_FILE_SKIP,
+-	    g3d_regions[0].memory, kvtophys(g3d_regions[0].memory));
+-	t_gs = mach_absolute_time();
+-	memcpy((void *)g3d_regions[0].memory, fw + G3D_SQE_FILE_SKIP, fw_size - G3D_SQE_FILE_SKIP);
+-	printf("mi8gpu: gs1: copied in %llu us; words %08x %08x %08x %08x\n", GS_US(t_gs),
++	printf("mi8gpu: gs1a: values ready: size %llu src %#lx dst %#lx phys %#llx\n",
++	    fw_size - G3D_SQE_FILE_SKIP, (uint64_t)(uintptr_t)fw, g3d_regions[0].memory,
++	    kvtophys(g3d_regions[0].memory));
++	printf("mi8gpu: gs1b: reading the source, first words %08x %08x\n",
++	    ((const uint32_t *)fw)[1], ((const uint32_t *)fw)[2]);
++	{
++		uint32_t nocopy = 0;
++
++		if (PE_parse_boot_argn("mi8gpu_nocopy", &nocopy, sizeof(nocopy)) && nocopy) {
++			printf("mi8gpu: gs1c: copy skipped (mi8gpu_nocopy=1)\n");
++		} else {
++			t_gs = mach_absolute_time();
++			memcpy((void *)g3d_regions[0].memory, fw + G3D_SQE_FILE_SKIP, fw_size - G3D_SQE_FILE_SKIP);
++			printf("mi8gpu: gs1c: copied in %llu us\n", GS_US(t_gs));
++		}
++	}
++	printf("mi8gpu: gs1d: destination first words %08x %08x %08x %08x\n",
+ 	    ((const uint32_t *)g3d_regions[0].memory)[0], ((const uint32_t *)g3d_regions[0].memory)[1],
+ 	    ((const uint32_t *)g3d_regions[0].memory)[2], ((const uint32_t *)g3d_regions[0].memory)[3]);
+ 	l1 = (uint64_t *)g3d_tables;
