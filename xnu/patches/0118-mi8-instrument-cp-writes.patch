@@ -1,0 +1,40 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2385,14 +2385,22 @@
+ 	}
+ 	/* GX registers survive a slumber (EXP-0108: HWCG was still on): make sure the CP of an earlier run is halted first */
+ 	printf("mi8gpu: CP_SQE_CNTL was %#x, RB_RPTR %u WPTR %u; halting it before the setup\n", rd(gpu3d + 4 * 0x0808), rd(gpu3d + 4 * 0x0806), rd(gpu3d + 4 * 0x0807));
++	printf("mi8gpu: cp 1: writing CP_SQE_CNTL=0 (halt)\n");
+ 	gpu_put(0x0808, 0, "REG_A6XX_CP_SQE_CNTL (halt)");
++	printf("mi8gpu: cp 1: returned, CP_SQE_CNTL=%#x\n", rd(gpu3d + 4 * 0x0808));
++	printf("mi8gpu: cp 2: writing RB_WPTR=0\n");
+ 	wr(gpu3d + 4 * 0x0807, 0);
++	printf("mi8gpu: cp 2: returned, RB_WPTR=%#x\n", rd(gpu3d + 4 * 0x0807));
+ 	/* hw_init: SQE_INSTR_BASE, RB_BASE, RB_CNTL (default size/block with NO_UPDATE: no hw_apriv on a630) */
++	printf("mi8gpu: cp 3: SQE_INSTR_BASE\n");
+ 	gpu_put(0x0830, (uint32_t)g3d_regions[0].address, "REG_A6XX_CP_SQE_INSTR_BASE_LO");
++	printf("mi8gpu: cp 3: returned\n");
+ 	gpu_put(0x0831, (uint32_t)(g3d_regions[0].address >> 32), "REG_A6XX_CP_SQE_INSTR_BASE_HI");
+ 	gpu_put(0x0800, (uint32_t)g3d_regions[1].address, "REG_A6XX_CP_RB_BASE_LO");
+ 	gpu_put(0x0801, (uint32_t)(g3d_regions[1].address >> 32), "REG_A6XX_CP_RB_BASE_HI");
++	printf("mi8gpu: cp 4: RB_CNTL\n");
+ 	gpu_put(0x0802, (12u | (2u << 8) | (1u << 27)), "REG_A6XX_CP_RB_CNTL");
++	printf("mi8gpu: cp 4: returned\n");
+ 	/* a6xx_cp_init: CP_ME_INIT with 8 words */
+ 	ring[wptr++] = pkt7(CP_ME_INIT_OPCODE, 8);
+ 	for (uint32_t i = 0; i < 8; i++) {
+@@ -2400,9 +2408,12 @@
+ 	}
+ 	to_memory(g3d_regions[1].memory, g3d_regions[1].size);
+ 	printf("mi8gpu: ring: %u words, first %#010x %#010x %#010x; CP_SQE_CNTL <- 1\n", wptr, ring[0], ring[1], ring[2]);
++	printf("mi8gpu: cp 5: SQE_CNTL=1 (starts the CP)\n");
+ 	gpu_put(0x0808, 1, "REG_A6XX_CP_SQE_CNTL");
+-	printf("mi8gpu: CP_RB_WPTR <- %u (a6xx_flush)\n", wptr);
++	printf("mi8gpu: cp 5: returned, CP_SQE_CNTL=%#x\n", rd(gpu3d + 4 * 0x0808));
++	printf("mi8gpu: cp 6: RB_WPTR <- %u (a6xx_flush)\n", wptr);
+ 	wr(gpu3d + 4 * 0x0807, wptr);
++	printf("mi8gpu: cp 6: returned, RB_WPTR=%#x\n", rd(gpu3d + 4 * 0x0807));
+ 	__asm__ volatile ("dsb sy" ::: "memory");
+ 	for (uint32_t i = 0; i < 500; i++) {
+ 		rptr = rd(gpu3d + 4 * 0x0806);
