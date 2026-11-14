@@ -1,0 +1,36 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -4458,6 +4458,18 @@
+ static bool (*const steps[])(void) = { step_gcc, step_rpmh, step_gpucc, step_cx_on, step_clocks, step_gmu_registers, step_smmu_global, step_smmu_contexts, step_gmu_tcm_test, step_gmu_firmware, step_rsc_pdc, step_gmu_smmu, step_trustzone, step_gmu_prepare, step_gmu_start, step_gmu_rail, step_gmu_hfi, step_gpu_look, step_gpu_init, step_gpu_cp, step_gpu_zap, step_gpu_paint };
+ #define STEPS ((uint32_t)(sizeof(steps) / sizeof(steps[0])))
+ 
++
++/* A second thread that keeps talking while the bring-up runs: if these stop too,
++ * the kernel died (a panic), not just the GPU thread. */
++static void
++mi8_heartbeat_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	for (uint32_t n = 0; n < 600; n++) {
++		printf("mi8gpu: alive %u\n", n);
++		delay_for_interval(500, 1000000);
++	}
++}
++
+ static void
+ mi8_adreno_thread(void *parameter, __unused wait_result_t result)
+ {
+@@ -4656,6 +4668,13 @@
+ 	if (kernel_thread_start(mi8_adreno_thread, (void *)(uintptr_t)last, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+ 	}
++	if (last >= 18) {
++		thread_t beat;
++
++		if (kernel_thread_start(mi8_heartbeat_thread, NULL, &beat) == KERN_SUCCESS) {
++			thread_deallocate(beat);
++		}
++	}
+ }
+ 
+ /* The calling thread runs on processor `cpu` from now on (the display driver's scaling threads: EXP-0117). */

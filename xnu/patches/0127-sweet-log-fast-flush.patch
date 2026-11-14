@@ -1,0 +1,7 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -716,3 +716,3 @@
+ 	for (;;) {
+-		(void)tsleep(&sweet_log_chan, PZERO, "sweetlog", hz * (int)sweet_log_secs);
++		(void)tsleep(&sweet_log_chan, PZERO, "sweetlog", MAX(hz / 8, 1));
+ 		uint64_t total = os_atomic_load(&sweet_log_total, relaxed);
