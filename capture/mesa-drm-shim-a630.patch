@@ -1,0 +1,15 @@
+--- a/src/freedreno/drm-shim/freedreno_noop.c
++++ b/src/freedreno/drm-shim/freedreno_noop.c
+@@ -250,6 +250,12 @@
+       .gmem_size = 1024 * 1024,
+    },
+    {
++      /* polaris' Adreno 630: the id and chip id the kernel reads off the GPU */
++      .gpu_id = 630,
++      .chip_id = 0x06030001,
++      .gmem_size = 512 * 1024,
++   },
++   {
+       .gpu_id = 618,
+       .chip_id = CHIPID(6, 1, 8, 0xff),
+       .gmem_size = 512 * 1024,
