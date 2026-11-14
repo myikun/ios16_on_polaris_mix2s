@@ -1,0 +1,109 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -36,6 +36,7 @@
+ #include <kern/thread.h>
+ #include <libkern/libkern.h>
+ #include <mach/mach_types.h>
++#include <mach/mach_time.h>
+ #include <pexpert/pexpert.h>
+ #include <sys/redwood_input.h>
+ #include <sys/systm.h>
+@@ -1191,6 +1192,8 @@
+ 	vm_offset_t cb = smmu_cb(G3D_CTX);
+ 	uint32_t wrong = 0, pages = 0, smr_value = SMMU_SMR_VALID | G3D_STREAM;
+ 	uint64_t fw_size = 0;
++	uint64_t t_gs = 0;
++	uint32_t region_pages = 0;
+ 	const uint8_t *fw = redwood_wifi_file("a630_sqe.fw", &fw_size);
+ 
+ 	if (fw == NULL || fw_size <= G3D_SQE_FILE_SKIP || fw_size - G3D_SQE_FILE_SKIP > g3d_regions[0].size) {
+@@ -1206,6 +1209,15 @@
+ 	}
+ 	printf("mi8gpu: a630_sqe.fw: %llu bytes, first words %08x %08x %08x %08x\n", fw_size, ((const uint32_t *)fw)[0],
+ 	    ((const uint32_t *)fw)[1], ((const uint32_t *)fw)[2], ((const uint32_t *)fw)[3]);
++	printf("mi8gpu: gs0: cb %u of %u, smr %u of %u, regions %u, table pool %u pages, g3d_ready %u\n",
++	    G3D_CTX, smmu_num_cb, G3D_SMR_ENTRY, smmu_num_smr, G3D_REGIONS, G3D_TABLE_POOL / 0x1000, g3d_ready ? 1 : 0);
++	for (uint32_t gr = 0; gr < G3D_REGIONS; gr++) {
++		printf("mi8gpu: gs0: region %u %-8s iova %#011llx %8u bytes %5u pages%s\n", gr,
++		    g3d_regions[gr].name, g3d_regions[gr].address, g3d_regions[gr].size,
++		    g3d_regions[gr].size / 0x1000, g3d_regions[gr].phys ? " (fixed phys)" : "");
++	}
++#define GS_US(since) ({ uint64_t _ns; \
++	absolutetime_to_nanoseconds(mach_absolute_time() - (since), &_ns); _ns / 1000; })
+ #define GS_MARK(text) do { \
+ 		printf("mi8gpu: gs: " text "\n"); \
+ 		for (int f = 0; f < 25; f++) { \
+@@ -1219,28 +1231,52 @@
+ 	}
+ 	for (uint32_t r = 0; r < G3D_REGIONS; r++) {
+ 		if (g3d_regions[r].phys != 0) {
++			printf("mi8gpu: gsA: %s uses a fixed physical address %#llx, nothing to allocate\n",
++			    g3d_regions[r].name, g3d_regions[r].phys);
+ 			continue;
+ 		}
++		printf("mi8gpu: gsA: allocating %s: %u bytes contiguous\n", g3d_regions[r].name,
++		    round_page(g3d_regions[r].size));
+ 		if (kmem_alloc_contig(kernel_map, &g3d_regions[r].memory, round_page(g3d_regions[r].size), PAGE_MASK, 0, 0,
+ 		    KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+ 			printf("mi8gpu: no memory for %s\n", g3d_regions[r].name);
+ 			g3d_free();
+ 			return false;
+ 		}
++		printf("mi8gpu: gsA: %s at %#lx (phys %#llx)\n", g3d_regions[r].name,
++		    g3d_regions[r].memory, kvtophys(g3d_regions[r].memory));
+ 	}
+ 	GS_MARK("b: buffers allocated, copying the SQE microcode");
++	printf("mi8gpu: gs1: copying %llu bytes to %#lx (phys %#llx)\n", fw_size - G3D_SQE_FILE_SKIP,
++	    g3d_regions[0].memory, kvtophys(g3d_regions[0].memory));
++	t_gs = mach_absolute_time();
+ 	memcpy((void *)g3d_regions[0].memory, fw + G3D_SQE_FILE_SKIP, fw_size - G3D_SQE_FILE_SKIP);
++	printf("mi8gpu: gs1: copied in %llu us; words %08x %08x %08x %08x\n", GS_US(t_gs),
++	    ((const uint32_t *)g3d_regions[0].memory)[0], ((const uint32_t *)g3d_regions[0].memory)[1],
++	    ((const uint32_t *)g3d_regions[0].memory)[2], ((const uint32_t *)g3d_regions[0].memory)[3]);
+ 	l1 = (uint64_t *)g3d_tables;
+ 	l2 = (uint64_t *)(g3d_tables + 0x1000);
+ 	root = kvtophys((vm_offset_t)l1);
+ 	l1[(g3d_regions[0].address >> 30) & 0x1ff] = kvtophys((vm_offset_t)l2) | PTE_TABLE;
++	printf("mi8gpu: gs2: l1 %#llx l2 %#llx root %#llx pool %#lx (%u pages)\n",
++	    (uint64_t)(uintptr_t)l1, (uint64_t)(uintptr_t)l2, root, g3d_tables, G3D_TABLE_POOL / 0x1000);
+ 	uint32_t next_l3 = 2;
+ 	for (uint32_t r = 0; r < G3D_REGIONS; r++) {
+ 		struct g3d_region *g = &g3d_regions[r];
+ 
++		region_pages = pages;
++		t_gs = mach_absolute_time();
++		printf("mi8gpu: gs3: region %u %-8s iova %#011llx %u pages, source %#llx, l3 used %u\n",
++		    r, g->name, g->address, g->size / 0x1000,
++		    g->memory ? kvtophys(g->memory) : g->phys, next_l3 - 2);
+ 		for (uint32_t off = 0; off < g->size; off += 0x1000) {
+ 			uint64_t va = g->address + off, pa = g->memory ? kvtophys(g->memory) + off : g->phys + off;
+ 			uint64_t *entry = &l2[(va >> 21) & 0x1ff];
++
++			if ((off & 0xfffff) == 0) {
++				printf("mi8gpu: gs3: %s +%#x of %#x, %u pages so far, l3 used %u\n",
++				    g->name, off, g->size, pages, next_l3 - 2);
++			}
+ 
+ 			if (*entry == 0) {
+ 				if (next_l3 >= G3D_TABLE_POOL / 0x1000) {
+@@ -1259,12 +1295,19 @@
+ 			l3[(va >> 12) & 0x1ff] = pa | PTE_GMU | PTE_AP_UNPRIV | PTE_PAGE;
+ 			pages++;
+ 		}
++		printf("mi8gpu: gs4: %s mapped %u pages in %llu us, l3 used %u\n",
++		    g->name, pages - region_pages, GS_US(t_gs), next_l3 - 2);
+ 		if (g->memory) {
++			printf("mi8gpu: gs5: flushing %s: %#lx + %u bytes\n", g->name, g->memory, round_page(g->size));
++			t_gs = mach_absolute_time();
+ 			to_memory(g->memory, round_page(g->size));
++			printf("mi8gpu: gs5: %s flush took %llu us\n", g->name, GS_US(t_gs));
+ 		}
+ 		printf("mi8gpu: the 3D core will see %#llx..%#llx (%s) in memory at %#llx\n", g->address, g->address + g->size - 1,
+ 		    g->name, g->memory ? kvtophys(g->memory) : g->phys);
+ 	}
++	printf("mi8gpu: gs6: %u pages mapped, %u level-3 tables used, tables at %#llx\n",
++	    pages, next_l3 - 2, kvtophys(g3d_tables));
+ 	GS_MARK("c: page tables built and each region flushed");
+ 	to_memory(g3d_tables, round_page(G3D_TABLE_POOL));
+ 	GS_MARK("d: programming the 3D SMMU entry and context bank");
