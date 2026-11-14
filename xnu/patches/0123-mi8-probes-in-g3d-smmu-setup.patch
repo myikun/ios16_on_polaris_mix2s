@@ -1,0 +1,44 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1206,6 +1206,14 @@
+ 	}
+ 	printf("mi8gpu: a630_sqe.fw: %llu bytes, first words %08x %08x %08x %08x\n", fw_size, ((const uint32_t *)fw)[0],
+ 	    ((const uint32_t *)fw)[1], ((const uint32_t *)fw)[2], ((const uint32_t *)fw)[3]);
++#define GS_MARK(text) do { \
++		printf("mi8gpu: gs: " text "\n"); \
++		for (int f = 0; f < 25; f++) { \
++			sleep_us(100000); \
++		} \
++	} while (0)
++	printf("mi8gpu: PROBE-BUILD-6 (g3d_smmu_setup markers)\n");
++	GS_MARK("a: tables for the 3D address space");
+ 	if (kmem_alloc(kernel_map, &g3d_tables, round_page(G3D_TABLE_POOL), KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+ 		return false;
+ 	}
+@@ -1220,6 +1228,7 @@
+ 			return false;
+ 		}
+ 	}
++	GS_MARK("b: buffers allocated, copying the SQE microcode");
+ 	memcpy((void *)g3d_regions[0].memory, fw + G3D_SQE_FILE_SKIP, fw_size - G3D_SQE_FILE_SKIP);
+ 	l1 = (uint64_t *)g3d_tables;
+ 	l2 = (uint64_t *)(g3d_tables + 0x1000);
+@@ -1256,7 +1265,9 @@
+ 		printf("mi8gpu: the 3D core will see %#llx..%#llx (%s) in memory at %#llx\n", g->address, g->address + g->size - 1,
+ 		    g->name, g->memory ? kvtophys(g->memory) : g->phys);
+ 	}
++	GS_MARK("c: page tables built and each region flushed");
+ 	to_memory(g3d_tables, round_page(G3D_TABLE_POOL));
++	GS_MARK("d: programming the 3D SMMU entry and context bank");
+ 	g3d_old.smr = rd(smmu + SMMU_SMR(G3D_SMR_ENTRY));
+ 	g3d_old.s2cr = rd(smmu + SMMU_S2CR(G3D_SMR_ENTRY));
+ 	g3d_old.cbar = rd(smmu + SMMU_CBAR(G3D_CTX));
+@@ -1301,6 +1312,7 @@
+ 		printf("mi8gpu: the SMMU did not take what was written for the 3D core\n");
+ 		return false;
+ 	}
++	GS_MARK("e: translating every page of the 3D address space");
+ 	for (uint32_t r = 0; r < G3D_REGIONS; r++) {
+ 		uint32_t prior = wrong;
+ 
