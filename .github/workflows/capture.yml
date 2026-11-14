@@ -60,11 +60,15 @@ jobs:
             -Dplatforms= \
             -Dglx=disabled \
             -Dllvm=disabled \
-            -Dgallium-drivers= \
+            -Dgallium-drivers=freedreno \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=msm \
             -Dtools=freedreno
           ninja -C build
+          # the no-op DRM shim: find it rather than assume its path
+          ninja -C build -t targets all | grep -iE 'shim|noop' | head -20 || true
+          ninja -C build src/freedreno/drm-shim/all 2>/dev/null || true
+          find build -name '*shim*.so' -o -name '*noop*.so' | head -10
 
       - name: Build the capture program
         run: |
@@ -78,9 +82,13 @@ jobs:
         run: |
           set -x
           B="$GITHUB_WORKSPACE/mesa/build"
-          SHIM="$B/src/freedreno/drm-shim/libfreedreno_noop_drm_shim.so"
-          ICD="$B/src/freedreno/vulkan/libvulkan_freedreno.so"
-          CFF="$B/src/freedreno/decode/cffdump"
+          SHIM=$(find "$B" -name '*shim*.so' | head -1)
+          ICD=$(find "$B" -name 'libvulkan_freedreno.so' | head -1)
+          CFF=$(find "$B" -name 'cffdump' -type f | head -1)
+          echo "SHIM=$SHIM"
+          echo "ICD=$ICD"
+          echo "CFF=$CFF"
+          if [ -z "$SHIM" ] || [ -z "$ICD" ]; then echo "missing shim or ICD"; exit 1; fi
           ls -l "$SHIM" "$ICD" "$CFF" || true
           mkdir -p out
           TAG="polaris_$$"
