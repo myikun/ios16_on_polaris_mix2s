@@ -1,0 +1,33 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1271,6 +1271,11 @@
+ 	GS_STOP(1);
+ 	printf("mi8gpu: gs1b: reading the source, first words %08x %08x\n",
+ 	    ((const uint32_t *)fw)[1], ((const uint32_t *)fw)[2]);
++	printf("mi8gpu: gs1b2: src %#lx (mod 8 %u) dst %#lx (mod 8 %u), %llu bytes\n",
++	    (uint64_t)(uintptr_t)(fw + G3D_SQE_FILE_SKIP),
++	    (unsigned)((uintptr_t)(fw + G3D_SQE_FILE_SKIP) & 7u),
++	    (uint64_t)g3d_regions[0].memory, (unsigned)(g3d_regions[0].memory & 7u),
++	    fw_size - G3D_SQE_FILE_SKIP);
+ 	GS_STOP(2);
+ 	{
+ 		uint32_t nocopy = 0;
+@@ -1278,9 +1283,15 @@
+ 		if (PE_parse_boot_argn("mi8gpu_nocopy", &nocopy, sizeof(nocopy)) && nocopy) {
+ 			printf("mi8gpu: gs1c: copy skipped (mi8gpu_nocopy=1)\n");
+ 		} else {
++			const uint8_t *s_ = fw + G3D_SQE_FILE_SKIP;
++			uint8_t *d_ = (uint8_t *)g3d_regions[0].memory;
++			uint64_t n_ = fw_size - G3D_SQE_FILE_SKIP;
++
+ 			t_gs = mach_absolute_time();
+-			memcpy((void *)g3d_regions[0].memory, fw + G3D_SQE_FILE_SKIP, fw_size - G3D_SQE_FILE_SKIP);
+-			printf("mi8gpu: gs1c: copied in %llu us\n", GS_US(t_gs));
++			for (uint64_t i_ = 0; i_ < n_; i_++) {
++				d_[i_] = s_[i_];
++			}
++			printf("mi8gpu: gs1c: copied %llu bytes in %llu us\n", n_, GS_US(t_gs));
+ 		}
+ 	}
+ 	GS_STOP(3);
