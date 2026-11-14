@@ -1,0 +1,169 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1116,6 +1116,7 @@
+ 	{ "ring", 0x10008000ull, 0x8000, 0 },   /* MSM_GPU_RINGBUFFER_SZ = 32 KB */
+ 	{ "memptrs", 0x10010000ull, 0x1000, 0 },
+ 	{ "screen", G3D_FB_IOVA, G3D_FB_BYTES, 0, G3D_FB_PHYS },
++	{ "test", 0x30000000ull, 8u << 20, 0 },        /* copy test: source | destination */
+ };
+ #define G3D_REGIONS ((uint32_t)(sizeof(g3d_regions) / sizeof(g3d_regions[0])))
+ #define G3D_SQE_FILE_SKIP       4u
+@@ -2672,11 +2673,11 @@
+ #define EV_CACHE_FLUSH_TS               0x04
+ #define EV_DEBUG_LABEL                  0x3f
+ 
+-/* Emit the batch-start registers and the blit state for a solid fill. */
++/* Emit the batch-start registers and the blit state (solid fill or a copy). */
+ static void
+-blit_setup_solid(uint32_t *ring, uint32_t *w, uint32_t rgba)
+-{
+-	uint32_t blt = (0xfu << 20) | (FMT6_8_8_8_8_UNORM << 8) | (1u << 7);
++blit_setup(uint32_t *ring, uint32_t *w, uint32_t rgba, bool solid)
++{
++	uint32_t blt = (0xfu << 20) | (FMT6_8_8_8_8_UNORM << 8) | (solid ? (1u << 7) : 0u);
+ 
+ #define BR(v) (ring[(*w)++ & 8191u] = (v))
+ #define BREG(r, v) do { BR(pkt4((r), 1)); BR(v); } while (0)
+@@ -2703,11 +2704,13 @@
+ 	BREG(REG_RB_CCU_CNTL, (1u << 0) | ((0x2000u >> 12) << 23));
+ 
+ 	/* clear colour, one byte per dword in the format's channel order */
+-	BR(pkt4(REG_RB_A2D_CLEAR_COLOR_DW0, 4));
+-	BR((rgba >> 24) & 0xffu);
+-	BR((rgba >> 16) & 0xffu);
+-	BR((rgba >> 8) & 0xffu);
+-	BR(rgba & 0xffu);
++	if (solid) {
++		BR(pkt4(REG_RB_A2D_CLEAR_COLOR_DW0, 4));
++		BR((rgba >> 24) & 0xffu);
++		BR((rgba >> 16) & 0xffu);
++		BR((rgba >> 8) & 0xffu);
++		BR(rgba & 0xffu);
++	}
+ 
+ 	BREG(REG_RB_A2D_BLT_CNTL, blt);
+ 	BREG(REG_GRAS_A2D_BLT_CNTL, blt);
+@@ -2737,6 +2740,99 @@
+ #undef BR
+ }
+ 
++
++/* Copy a rectangle between two 64-byte aligned linear surfaces, as sapphire's
++ * blit_copy does it: describe the source texture, its rectangle, then the same
++ * destination and one CP_BLIT. */
++static void
++blit_copy_rect(uint32_t *ring, uint32_t *w, uint64_t src, uint32_t spitch,
++    uint64_t dst, uint32_t dpitch, uint32_t w_, uint32_t h_)
++{
++#define BR(v) (ring[(*w)++ & 8191u] = (v))
++	blit_setup(ring, w, 0, false);
++	BR(pkt4(REG_TPL1_A2D_SRC_TEXTURE_INFO, 5));
++	BR(FMT6_8_8_8_8_UNORM | (1u << 20) | (1u << 22));      /* LINEAR, WZYX */
++	BR(w_ | (h_ << 15));                                    /* WIDTH, HEIGHT */
++	BR((uint32_t)src);
++	BR((uint32_t)(src >> 32));
++	BR((spitch >> 6) << 9);                                 /* PITCH in 64-byte units, bits 9..23 */
++	BR(pkt4(REG_GRAS_A2D_SRC_XMIN, 4));
++	BR(0);
++	BR((w_ - 1) << 8);
++	BR(0);
++	BR((h_ - 1) << 8);
++	blit_rect_solid(ring, w, dst, dpitch, 0, 0, w_ - 1, h_ - 1);
++#undef BR
++}
++
++/* Fill the scratch region's source half, clear the destination half, copy with
++ * the GPU, then compare through the CPU. */
++static bool
++polaris_blit_copy_test(void)
++{
++	uint32_t *ring = (uint32_t *)g3d_regions[1].memory;
++	uint32_t *src = (uint32_t *)(uintptr_t)g3d_regions[4].memory;
++	uint32_t *dst = (uint32_t *)(uintptr_t)(g3d_regions[4].memory + (4u << 20));
++	const uint32_t w_ = 1024, h_ = 1024, pitch = 4096;
++	uint32_t w, bad = 0;
++	uint64_t src_iova = g3d_regions[4].address;
++	uint64_t dst_iova = g3d_regions[4].address + (4u << 20);
++
++	if (g3d_regions[4].memory == 0) {
++		printf("mi8gpu: copy test: no scratch memory\n");
++		return false;
++	}
++	for (uint32_t y = 0; y < h_; y++) {
++		for (uint32_t x = 0; x < w_; x++) {
++			src[y * (pitch / 4) + x] = 0xff000000u | ((x & 0xff) << 16) | ((y & 0xff) << 8) | 0x5a;
++			dst[y * (pitch / 4) + x] = 0;
++		}
++	}
++	to_memory(g3d_regions[4].memory, 8u << 20);
++
++	w = cp_wptr & 8191u;
++	printf("mi8gpu: A2D copy %ux%u pitch %u: src %#llx dst %#llx (ring wptr %u)\n",
++	    w_, h_, pitch, src_iova, dst_iova, w);
++	blit_copy_rect(ring, &w, src_iova, pitch, dst_iova, pitch, w_, h_);
++	ring[w++ & 8191u] = pkt7(CP_EVENT_WRITE_OPCODE, 1);
++	ring[w++ & 8191u] = EV_CACHE_FLUSH_TS;
++	ring[w++ & 8191u] = pkt7(CP_WAIT_FOR_IDLE_OPCODE, 0);
++	to_memory(g3d_regions[1].memory, g3d_regions[1].size);
++	wr(gpu3d + 4 * 0x0807, w & 8191u);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	{
++		bool done = false;
++		uint32_t rptr = 0;
++
++		for (uint32_t i = 0; i < 2000; i++) {
++			rptr = rd(gpu3d + 4 * 0x0806);
++			if (rptr == (w & 8191u)) {
++				done = true;
++				break;
++			}
++			sleep_us(100);
++		}
++		cp_wptr = w;
++		printf("mi8gpu: A2D copy %s: RB_RPTR %u WPTR %u, RBBM_STATUS %#x CP_HW_FAULT %#x\n",
++		    done ? "consumed" : "NOT consumed", rptr, w & 8191u,
++		    rd(gpu3d + 4 * 0x0210), rd(gpu3d + 4 * 0x0821));
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++	to_memory(g3d_regions[4].memory, 8u << 20);
++	for (uint32_t y = 0; y < h_; y++) {
++		for (uint32_t x = 0; x < w_; x++) {
++			uint32_t want = 0xff000000u | ((x & 0xff) << 16) | ((y & 0xff) << 8) | 0x5a;
++
++			if (dst[y * (pitch / 4) + x] != want) {
++				bad++;
++			}
++		}
++	}
++	printf("mi8gpu: A2D copy check: %u of %u pixels differ; dst[0..3] %08x %08x %08x %08x (want ff00005a)\n",
++	    bad, w_ * h_, dst[0], dst[1], dst[2], dst[3]);
++	return bad == 0;
++}
++
+ /* Fill the whole panel with one colour, through the GPU, and wait for it. */
+ static bool
+ polaris_blit_fill(uint32_t rgba)
+@@ -2750,7 +2846,7 @@
+ 
+ 	printf("mi8gpu: A2D fill %08x at iova %#llx pitch %u lines %u (ring wptr %u)\n",
+ 	    rgba, base, pitch, lines, w);
+-	blit_setup_solid(ring, &w, rgba);
++	blit_setup(ring, &w, rgba, true);
+ 	blit_rect_solid(ring, &w, base, pitch, 0, 0, G3D_FB_WIDTH - 1, lines - 1);
+ 	/* flush what the CP will read, publish the write pointer, wait for the CP */
+ 	ring[w++ & 8191u] = pkt7(CP_EVENT_WRITE_OPCODE, 1);
+@@ -2804,6 +2900,13 @@
+ 
+ 		if (PE_parse_boot_argn("mi8gpu_blit", &rgba, sizeof(rgba)) && rgba != 0) {
+ 			polaris_blit_fill(rgba);
++		}
++		{
++			uint32_t cp_test = 0;
++
++			if (PE_parse_boot_argn("mi8gpu_copy", &cp_test, sizeof(cp_test)) && cp_test) {
++				polaris_blit_copy_test();
++			}
+ 		}
+ 	}
+ 	/* Needs only a working CP, so it runs before anything about secure mode. */
