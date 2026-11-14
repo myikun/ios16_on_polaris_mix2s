@@ -1,0 +1,14 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1283,7 +1283,9 @@
+ 		if (PE_parse_boot_argn("mi8gpu_nocopy", &nocopy, sizeof(nocopy)) && nocopy) {
+ 			printf("mi8gpu: gs1c: copy skipped (mi8gpu_nocopy=1)\n");
+ 		} else {
+-			const uint8_t *s_ = fw + G3D_SQE_FILE_SKIP;
++			/* Device memory: one byte at a time, and volatile so the compiler
++			 * cannot merge the loads into wider, misaligned ones. */
++			const volatile uint8_t *s_ = fw + G3D_SQE_FILE_SKIP;
+ 			uint8_t *d_ = (uint8_t *)g3d_regions[0].memory;
+ 			uint64_t n_ = fw_size - G3D_SQE_FILE_SKIP;
+ 
