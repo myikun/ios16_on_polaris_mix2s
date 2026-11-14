@@ -98,6 +98,36 @@ jobs:
           MAKEFLAGS: ${{ inputs.keep_going == 'true' && '-k' || '' }}
         run: bash build.sh
 
+      # The patched sources, so they can be read here instead of guessed at from
+      # the patch series. Small files; they make every later change exact.
+      - name: Upload patched sources (display)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fb-source
+          path: dxb/xnu/iokit/Kernel/arm/SweetFramebuffer.cpp
+          if-no-files-found: warn
+
+      - name: Upload patched sources (hid)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hid-source
+          path: |
+            dxb/xnu/iokit/Kernel/arm/hid/SweetHID.cpp
+            dxb/xnu/iokit/Kernel/arm/hid/SweetHIDTouch.cpp
+          if-no-files-found: warn
+
+      - name: Upload patched sources (device drivers)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-source
+          path: |
+            dxb/xnu/bsd/dev/polaris_touch_i2c.c
+            dxb/xnu/bsd/dev/polaris_gpu_fw.c
+          if-no-files-found: warn
+
       - name: Collect
         if: always()
         run: |
