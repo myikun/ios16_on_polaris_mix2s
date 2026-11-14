@@ -1,0 +1,44 @@
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -1,2 +1,10 @@
+ #if defined(SWEET)
+ #include <IOKit/IOPlatformExpert.h>
++
++/*
++ * The device's identity. The ADT carries a model (iPhone10,3) but no serial,
++ * so one is published here: a random Apple-style 12-character serial and a
++ * UUID, both fixed so they survive every reboot.
++ */
++#define SWEET_SERIAL_NUMBER  "F2LX9A1BJC6L"
++#define SWEET_PLATFORM_UUID  "3C1F4A8E-7B2D-4E55-9A61-2F0B6D8C41E7"
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -2,4 +2,16 @@
+ 	if (!IODTPlatformExpert::start(provider)) {
+ 		return false;
+ 	}
++	/*
++	 * The identity the platform device and the IORegistry look for. It goes on
++	 * this service, on the nub it was started with and (in processTopLevel)
++	 * on the registry root, because that is where each reader looks.
++	 */
++	setProperty("IOPlatformSerialNumber", SWEET_SERIAL_NUMBER);
++	setProperty("IOPlatformUUID", SWEET_PLATFORM_UUID);
++	if (provider != NULL) {
++		provider->setProperty("IOPlatformSerialNumber", SWEET_SERIAL_NUMBER);
++		provider->setProperty("IOPlatformUUID", SWEET_PLATFORM_UUID);
++	}
++	IOLog("SWEET: platform identity: serial %s, UUID %s\n", SWEET_SERIAL_NUMBER, SWEET_PLATFORM_UUID);
+ 	registerService();
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -1 +1,6 @@
++	/* The identity, on the root the IORegistry walks from. */
++	if (root != NULL) {
++		root->setProperty("IOPlatformSerialNumber", SWEET_SERIAL_NUMBER);
++		root->setProperty("IOPlatformUUID", SWEET_PLATFORM_UUID);
++	}
+ 	IORegistryEntry *cpus = root->childFromPath("cpus", gIODTPlane);
