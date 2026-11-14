@@ -1,0 +1,65 @@
+diff --git a/bsd/dev/sweet_keys.c b/bsd/dev/sweet_keys.c
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -27,6 +27,10 @@
+ #define KEYS_NO_APID     0xffffu
+ 
+ static vm_offset_t keys_core, keys_obs, keys_cnfg;
++/* sweetkeyscan=1: the real-time status of every PM8998 GPIO, to find a key pin */
++static bool keys_scan;
++static uint16_t keys_scan_apid[16];
++static uint8_t keys_scan_last[16];
+ static uint16_t keys_pon_apid = KEYS_NO_APID, keys_gpio_apid = KEYS_NO_APID;
+ static uint32_t keys_version, keys_last_status;
+ static bool keys_started;
+@@ -102,6 +106,18 @@
+ 	for (;;) {
+ 		uint8_t pon = 0, gpio = 0;
+ 		bool pok = keys_read(keys_pon_apid, KEYS_PON_RT, &pon);
++		if (keys_scan) {
++			for (int i = 0; i < 16; i++) {
++				uint8_t v = 0;
++
++				if (keys_scan_apid[i] == KEYS_NO_APID ||
++				    !keys_read(keys_scan_apid[i], 0x10, &v) || v == keys_scan_last[i]) {
++					continue;
++				}
++				printf("SWEET KEYS: GPIO 0xC%X status %#x (was %#x)\n", i, v, keys_scan_last[i]);
++				keys_scan_last[i] = v;
++			}
++		}
+ 		bool gok = keys_read(keys_gpio_apid, KEYS_GPIO_RT, &gpio);
+ 		int now[3] = {!!(pon & 1u), !(gpio & 1u), !!(pon & 2u)};
+ 		if (!pok || !gok) {
+@@ -161,6 +177,31 @@
+ 		printf("SWEET KEYS: unsupported arbiter version=%#x apids=%u\n",
+ 		    keys_version, count);
+ 		return;
++	}
++	{
++		int scan = 0;
++
++		PE_parse_boot_argn("sweetkeyscan", &scan, sizeof(scan));
++		keys_scan = scan != 0;
++	}
++	if (keys_scan) {
++		for (uint32_t n = 0; n < 16; n++) {
++			keys_scan_apid[n] = KEYS_NO_APID;
++			keys_scan_last[n] = 0xff;
++		}
++		for (uint32_t n = 0; n < count; n++) {
++			uint32_t map = keys_rd(keys_core, 0x900u + 4u * n);
++			uint32_t ppid = (map >> 8) & 0xfffu;
++
++			if (map != 0 && ppid >= 0xc0u && ppid <= 0xcfu) {
++				keys_scan_apid[ppid - 0xc0u] = (uint16_t)n;
++			}
++		}
++		printf("SWEET KEYS: scan: GPIO apids %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u\n",
++		    keys_scan_apid[0], keys_scan_apid[1], keys_scan_apid[2], keys_scan_apid[3],
++		    keys_scan_apid[4], keys_scan_apid[5], keys_scan_apid[6], keys_scan_apid[7],
++		    keys_scan_apid[8], keys_scan_apid[9], keys_scan_apid[10], keys_scan_apid[11],
++		    keys_scan_apid[12], keys_scan_apid[13], keys_scan_apid[14], keys_scan_apid[15]);
+ 	}
+ 	keys_pon_apid = keys_find_apid(0x008, count);
+ 	/* polaris: the PM8998's GPIO6 (0xC500 of slave 0), not sweet's PM6150L 0x4C1 */
