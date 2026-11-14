@@ -1,0 +1,33 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1185,6 +1185,18 @@
+ 	g3d_free();
+ }
+ 
++
++/* A wait that gives up the processor: the busy form never returned for this thread. */
++static void
++gs_sleep_ms(uint32_t ms)
++{
++	uint64_t deadline;
++
++	clock_interval_to_deadline(ms, kMillisecondScale, &deadline);
++	assert_wait_deadline((event_t)gs_sleep_ms, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
+ static bool
+ g3d_smmu_setup(void)
+ {
+@@ -1222,8 +1234,8 @@
+ 		uint32_t nw_ = 0; \
+ 		printf("mi8gpu: gs: " text "\n"); \
+ 		if (!(PE_parse_boot_argn("mi8gpu_nowait", &nw_, sizeof(nw_)) && nw_)) { \
+-			for (int f = 0; f < 25; f++) { \
+-				sleep_us(100000); \
++			for (int f = 0; f < 5; f++) { \
++				gs_sleep_ms(500); \
+ 			} \
+ 		} \
+ 		printf("mi8gpu: gs: " text " [wait done]\n"); \
