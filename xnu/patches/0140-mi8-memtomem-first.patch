@@ -1,0 +1,122 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2612,54 +2612,7 @@
+ 		return;
+ 	}
+ 	printf("mi8gpu: SECVID_TRUST_CNTL before: %#x\n", rd(gpu3d + 4 * 0xf400));
+-	{
+-		uint32_t ns = 0;
+-
+-		if (PE_parse_boot_argn("mi8gpu_nonsecure", &ns, sizeof(ns)) && ns) {
+-			uint32_t was = rd(gpu3d + 4 * 0xf400);
+-
+-			wr(gpu3d + 4 * 0xf400, 0);
+-			__asm__ volatile ("dsb sy" ::: "memory");
+-			printf("mi8gpu: SECVID_TRUST_CNTL forced: was %#x, reads %#x now\n",
+-			    was, rd(gpu3d + 4 * 0xf400));
+-		}
+-	}
+-	bool ok;
+-
+-	if (rd(gpu3d + 4 * 0xf400) == 0) {
+-		/* a slumber leaves the core where it was (EXP-0114): out of secure mode, with the zap still authenticated if it was kept */
+-		printf("mi8gpu: the 3D core is already out of secure mode: the zap shader is not loaded again, no CP_SET_SECURE_MODE\n");
+-		ok = true;
+-	} else {
+-		if (!zap_load(true)) {
+-			printf("mi8gpu: zap not authenticated; the secure mode is left as it is\n");
+-			return;
+-		}
+-		ring[wptr++] = pkt7(CP_SET_SECURE_MODE_OPCODE, 1);
+-		ring[wptr++] = 0;
+-		printf("mi8gpu: CP_SET_SECURE_MODE(0) submitted\n");
+-		ok = gpu_wait_ring(wptr, "after CP_SET_SECURE_MODE");
+-	}
+-	printf("mi8gpu: SECVID_TRUST_CNTL after: %#x (%s); GPU idle: %s\n", rd(gpu3d + 4 * 0xf400),
+-	    rd(gpu3d + 4 * 0xf400) == 0 ? "NON-SECURE MODE" : "still secure", ok ? "yes" : "NO");
+-	gpu_nonsecure = ok && rd(gpu3d + 4 * 0xf400) == 0;
+-	if (!ok) {
+-		return;
+-	}
+-	/* the first real command: CP_MEM_WRITE of two words into the memptrs page, read back by us afterwards */
+-	memptrs[2] = memptrs[3] = 0;
+-	to_memory((vm_offset_t)memptrs, 0x1000);
+-	ring[wptr++] = pkt7(CP_MEM_WRITE_OPCODE, 4);
+-	ring[wptr++] = (uint32_t)(g3d_regions[2].address + 8);
+-	ring[wptr++] = (uint32_t)((g3d_regions[2].address + 8) >> 32);
+-	ring[wptr++] = 0xc0ffee21;
+-	ring[wptr++] = 0x0badf00d;
+-	printf("mi8gpu: CP_MEM_WRITE submitted (iova %#llx <- c0ffee21 0badf00d)\n", g3d_regions[2].address + 8);
+-	ok = gpu_wait_ring(wptr, "after CP_MEM_WRITE");
+-	cp_wptr = wptr;
+-	to_memory((vm_offset_t)memptrs, 0x1000);
+-	printf("mi8gpu: memptrs[2..3] = %#010x %#010x -> the CP's first write %s\n", memptrs[2], memptrs[3],
+-	    (memptrs[2] == 0xc0ffee21 && memptrs[3] == 0x0badf00d) ? "ARRIVED in memory" : "did NOT arrive");
++	/* Needs only a working CP, so it runs before anything about secure mode. */
+ 	{
+ 		uint32_t shape = 0;
+ 
+@@ -2697,6 +2650,62 @@
+ 			cp_wptr = wptr;
+ 		}
+ 	}
++	{
++		uint32_t skipzap = 0;
++
++		if (PE_parse_boot_argn("mi8gpu_skipzap", &skipzap, sizeof(skipzap)) && skipzap) {
++			printf("mi8gpu: zap skipped (mi8gpu_skipzap=1); the secure mode is left as it is\n");
++			return;
++		}
++	}
++	{
++		uint32_t ns = 0;
++
++		if (PE_parse_boot_argn("mi8gpu_nonsecure", &ns, sizeof(ns)) && ns) {
++			uint32_t was = rd(gpu3d + 4 * 0xf400);
++
++			wr(gpu3d + 4 * 0xf400, 0);
++			__asm__ volatile ("dsb sy" ::: "memory");
++			printf("mi8gpu: SECVID_TRUST_CNTL forced: was %#x, reads %#x now\n",
++			    was, rd(gpu3d + 4 * 0xf400));
++		}
++	}
++	bool ok;
++
++	if (rd(gpu3d + 4 * 0xf400) == 0) {
++		/* a slumber leaves the core where it was (EXP-0114): out of secure mode, with the zap still authenticated if it was kept */
++		printf("mi8gpu: the 3D core is already out of secure mode: the zap shader is not loaded again, no CP_SET_SECURE_MODE\n");
++		ok = true;
++	} else {
++		if (!zap_load(true)) {
++			printf("mi8gpu: zap not authenticated; the secure mode is left as it is\n");
++			return;
++		}
++		ring[wptr++] = pkt7(CP_SET_SECURE_MODE_OPCODE, 1);
++		ring[wptr++] = 0;
++		printf("mi8gpu: CP_SET_SECURE_MODE(0) submitted\n");
++		ok = gpu_wait_ring(wptr, "after CP_SET_SECURE_MODE");
++	}
++	printf("mi8gpu: SECVID_TRUST_CNTL after: %#x (%s); GPU idle: %s\n", rd(gpu3d + 4 * 0xf400),
++	    rd(gpu3d + 4 * 0xf400) == 0 ? "NON-SECURE MODE" : "still secure", ok ? "yes" : "NO");
++	gpu_nonsecure = ok && rd(gpu3d + 4 * 0xf400) == 0;
++	if (!ok) {
++		return;
++	}
++	/* the first real command: CP_MEM_WRITE of two words into the memptrs page, read back by us afterwards */
++	memptrs[2] = memptrs[3] = 0;
++	to_memory((vm_offset_t)memptrs, 0x1000);
++	ring[wptr++] = pkt7(CP_MEM_WRITE_OPCODE, 4);
++	ring[wptr++] = (uint32_t)(g3d_regions[2].address + 8);
++	ring[wptr++] = (uint32_t)((g3d_regions[2].address + 8) >> 32);
++	ring[wptr++] = 0xc0ffee21;
++	ring[wptr++] = 0x0badf00d;
++	printf("mi8gpu: CP_MEM_WRITE submitted (iova %#llx <- c0ffee21 0badf00d)\n", g3d_regions[2].address + 8);
++	ok = gpu_wait_ring(wptr, "after CP_MEM_WRITE");
++	cp_wptr = wptr;
++	to_memory((vm_offset_t)memptrs, 0x1000);
++	printf("mi8gpu: memptrs[2..3] = %#010x %#010x -> the CP's first write %s\n", memptrs[2], memptrs[3],
++	    (memptrs[2] == 0xc0ffee21 && memptrs[3] == 0x0badf00d) ? "ARRIVED in memory" : "did NOT arrive");
+ 	if (ok && gmu_last_step >= 22 && memptrs[2] == 0xc0ffee21 && memptrs[3] == 0x0badf00d) {
+ 		uint32_t passes = 1;
+ 
