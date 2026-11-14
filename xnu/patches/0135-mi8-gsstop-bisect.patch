@@ -1,0 +1,87 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1195,6 +1195,29 @@
+ 	uint64_t t_gs = 0;
+ 	uint32_t region_pages = 0;
+ 	const uint8_t *fw = redwood_wifi_file("a630_sqe.fw", &fw_size);
++	uint32_t gsstop = 0;
++
++	PE_parse_boot_argn("mi8gpu_gsstop", &gsstop, sizeof(gsstop));
++	{
++		uint32_t d = 0;
++
++		/* Let the system finish booting (and the log writer start) before the
++		 * steps that can stop the machine. */
++		if (PE_parse_boot_argn("mi8gpu_delay", &d, sizeof(d)) && d) {
++			printf("mi8gpu: gs: holding the 3D SMMU setup for %u s\n", d);
++			for (uint32_t i = 0; i < d; i++) {
++				sleep_us(1000000);
++			}
++			printf("mi8gpu: gs: delay over, starting now\n");
++		}
++	}
++#define GS_STOP(n) do { \
++		if (gsstop == (n)) { \
++			printf("mi8gpu: gs: checkpoint %u reached, stopping here\n", (n)); \
++			g3d_free(); \
++			return false; \
++		} \
++	} while (0)
+ 
+ 	if (fw == NULL || fw_size <= G3D_SQE_FILE_SKIP || fw_size - G3D_SQE_FILE_SKIP > g3d_regions[0].size) {
+ 		printf("mi8gpu: a630_sqe.fw missing or not the expected size (%llu)\n", fw_size);
+@@ -1245,8 +1268,10 @@
+ 	printf("mi8gpu: gs1a: values ready: size %llu src %#lx dst %#lx phys %#llx\n",
+ 	    fw_size - G3D_SQE_FILE_SKIP, (uint64_t)(uintptr_t)fw, g3d_regions[0].memory,
+ 	    kvtophys(g3d_regions[0].memory));
++	GS_STOP(1);
+ 	printf("mi8gpu: gs1b: reading the source, first words %08x %08x\n",
+ 	    ((const uint32_t *)fw)[1], ((const uint32_t *)fw)[2]);
++	GS_STOP(2);
+ 	{
+ 		uint32_t nocopy = 0;
+ 
+@@ -1258,15 +1283,18 @@
+ 			printf("mi8gpu: gs1c: copied in %llu us\n", GS_US(t_gs));
+ 		}
+ 	}
++	GS_STOP(3);
+ 	printf("mi8gpu: gs1d: destination first words %08x %08x %08x %08x\n",
+ 	    ((const uint32_t *)g3d_regions[0].memory)[0], ((const uint32_t *)g3d_regions[0].memory)[1],
+ 	    ((const uint32_t *)g3d_regions[0].memory)[2], ((const uint32_t *)g3d_regions[0].memory)[3]);
++	GS_STOP(4);
+ 	l1 = (uint64_t *)g3d_tables;
+ 	l2 = (uint64_t *)(g3d_tables + 0x1000);
+ 	root = kvtophys((vm_offset_t)l1);
+ 	l1[(g3d_regions[0].address >> 30) & 0x1ff] = kvtophys((vm_offset_t)l2) | PTE_TABLE;
+ 	printf("mi8gpu: gs2: l1 %#llx l2 %#llx root %#llx pool %#lx (%u pages)\n",
+ 	    (uint64_t)(uintptr_t)l1, (uint64_t)(uintptr_t)l2, root, g3d_tables, G3D_TABLE_POOL / 0x1000);
++	GS_STOP(5);
+ 	uint32_t next_l3 = 2;
+ 	for (uint32_t r = 0; r < G3D_REGIONS; r++) {
+ 		struct g3d_region *g = &g3d_regions[r];
+@@ -1315,6 +1343,7 @@
+ 	}
+ 	printf("mi8gpu: gs6: %u pages mapped, %u level-3 tables used, tables at %#llx\n",
+ 	    pages, next_l3 - 2, kvtophys(g3d_tables));
++	GS_STOP(6);
+ 	GS_MARK("c: page tables built and each region flushed");
+ 	to_memory(g3d_tables, round_page(G3D_TABLE_POOL));
+ 	GS_MARK("d: programming the 3D SMMU entry and context bank");
+@@ -1362,6 +1391,7 @@
+ 		printf("mi8gpu: the SMMU did not take what was written for the 3D core\n");
+ 		return false;
+ 	}
++	GS_STOP(7);
+ 	GS_MARK("e: translating every page of the 3D address space");
+ 	for (uint32_t r = 0; r < G3D_REGIONS; r++) {
+ 		uint32_t prior = wrong;
+@@ -1386,6 +1416,7 @@
+ 		}
+ 	}
+ 	printf("mi8gpu: 3D core address space: %u pages, %u wrong; context fault status %#010x\n", pages, wrong, rd(cb + CB_FSR));
++	GS_STOP(8);
+ 	g3d_ready = wrong == 0;
+ 	return g3d_ready;
+ }
