@@ -1,0 +1,86 @@
+diff --git a/bsd/dev/polaris_gpu_fw.c b/bsd/dev/polaris_gpu_fw.c
+--- a/bsd/dev/polaris_gpu_fw.c
++++ b/bsd/dev/polaris_gpu_fw.c
+@@ -39,6 +39,16 @@
+ 	if (strcmp(name, "a630_zap.mdt") == 0) {
+ 		return polaris_blob("zapfw_pa", "zapfw_size", size);
+ 	}
++	/* The zap loader reads the loadable segment next to the header. */
++	if (strcmp(name, "a630_zap.b02") == 0) {
++		return polaris_blob("zapb02_pa", "zapb02_size", size);
++	}
++	if (strcmp(name, "a630_zap.b00") == 0) {
++		return polaris_blob("zapb00_pa", "zapb00_size", size);
++	}
++	if (strcmp(name, "a630_zap.b01") == 0) {
++		return polaris_blob("zapb01_pa", "zapb01_size", size);
++	}
+ 	return NULL;
+ }
+ 
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2612,6 +2612,18 @@
+ 		return;
+ 	}
+ 	printf("mi8gpu: SECVID_TRUST_CNTL before: %#x\n", rd(gpu3d + 4 * 0xf400));
++	{
++		uint32_t ns = 0;
++
++		if (PE_parse_boot_argn("mi8gpu_nonsecure", &ns, sizeof(ns)) && ns) {
++			uint32_t was = rd(gpu3d + 4 * 0xf400);
++
++			wr(gpu3d + 4 * 0xf400, 0);
++			__asm__ volatile ("dsb sy" ::: "memory");
++			printf("mi8gpu: SECVID_TRUST_CNTL forced: was %#x, reads %#x now\n",
++			    was, rd(gpu3d + 4 * 0xf400));
++		}
++	}
+ 	bool ok;
+ 
+ 	if (rd(gpu3d + 4 * 0xf400) == 0) {
+@@ -2648,6 +2660,43 @@
+ 	to_memory((vm_offset_t)memptrs, 0x1000);
+ 	printf("mi8gpu: memptrs[2..3] = %#010x %#010x -> the CP's first write %s\n", memptrs[2], memptrs[3],
+ 	    (memptrs[2] == 0xc0ffee21 && memptrs[3] == 0x0badf00d) ? "ARRIVED in memory" : "did NOT arrive");
++	{
++		uint32_t shape = 0;
++
++		if (PE_parse_boot_argn("mi8gpu_memtomem", &shape, sizeof(shape)) && shape) {
++			uint32_t *src_ = (uint32_t *)((uintptr_t)memptrs + 0x800);
++			uint32_t *dst_ = (uint32_t *)((uintptr_t)memptrs + 0x900);
++			uint64_t src_iova = g3d_regions[2].address + 0x800;
++			uint64_t dst_iova = g3d_regions[2].address + 0x900;
++			uint32_t i_;
++
++			for (i_ = 0; i_ < 64; i_++) {
++				src_[i_] = 0xdead0000u + i_;
++				dst_[i_] = 0;
++			}
++			to_memory((vm_offset_t)memptrs, 0x1000);
++			ring[wptr++] = pkt7(0x73u, shape == 1 ? 5u : 6u);
++			ring[wptr++] = 0;
++			ring[wptr++] = (uint32_t)dst_iova;
++			ring[wptr++] = (uint32_t)(dst_iova >> 32);
++			ring[wptr++] = (uint32_t)src_iova;
++			ring[wptr++] = (uint32_t)(src_iova >> 32);
++			if (shape != 1) {
++				ring[wptr++] = 64;
++			}
++			printf("mi8gpu: CP_MEM_TO_MEM shape %u submitted (src %#llx dst %#llx)\n",
++			    shape, src_iova, dst_iova);
++			{
++				bool mtm_ok = gpu_wait_ring(wptr, "after CP_MEM_TO_MEM");
++
++				to_memory((vm_offset_t)memptrs, 0x1000);
++				printf("mi8gpu: CP_MEM_TO_MEM %s: RBBM_STATUS %#x INT_0 %#x; dst[0..3] %08x %08x %08x %08x (expected dead0000 dead0001 dead0002 dead0003)\n",
++				    mtm_ok ? "ring consumed" : "ring NOT consumed", rd(gpu3d + 4 * 0x0210),
++				    rd(gpu3d + 4 * 0x0201), dst_[0], dst_[1], dst_[2], dst_[3]);
++			}
++			cp_wptr = wptr;
++		}
++	}
+ 	if (ok && gmu_last_step >= 22 && memptrs[2] == 0xc0ffee21 && memptrs[3] == 0x0badf00d) {
+ 		uint32_t passes = 1;
+ 
