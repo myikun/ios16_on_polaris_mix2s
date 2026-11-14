@@ -1,0 +1,39 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1196,17 +1196,6 @@
+ 	uint32_t region_pages = 0;
+ 	const uint8_t *fw = redwood_wifi_file("a630_sqe.fw", &fw_size);
+ 
+-	/* The screen region must be this phone's frame buffer, not dipper's address. */
+-	if (PE_state.video.v_baseAddr != 0 && PE_state.video.v_rowBytes != 0) {
+-		uint64_t fb_phys = (uint64_t)kvtophys((vm_offset_t)PE_state.video.v_baseAddr);
+-
+-		if (fb_phys != 0) {
+-			g3d_regions[3].phys = fb_phys;
+-			printf("mi8gpu: screen region: panel base %#lx -> phys %#llx, rowbytes %lu %lux%lu\n",
+-			    PE_state.video.v_baseAddr, fb_phys, PE_state.video.v_rowBytes,
+-			    PE_state.video.v_width, PE_state.video.v_height);
+-		}
+-	}
+ 	uint32_t gsstop = 0;
+ 
+ 	PE_parse_boot_argn("mi8gpu_gsstop", &gsstop, sizeof(gsstop));
+@@ -1254,6 +1243,17 @@
+ #define GS_US(since) ({ uint64_t _ns; \
+ 	absolutetime_to_nanoseconds(mach_absolute_time() - (since), &_ns); _ns / 1000; })
+ #define GS_MARK(text) printf("mi8gpu: gs: " text "\n")
++	/* The screen region must be this phone's frame buffer, not dipper's address. */
++	if (PE_state.video.v_baseAddr != 0 && PE_state.video.v_rowBytes != 0) {
++		uint64_t fb_phys = (uint64_t)kvtophys((vm_offset_t)PE_state.video.v_baseAddr);
++
++		if (fb_phys != 0) {
++			g3d_regions[3].phys = fb_phys;
++			printf("mi8gpu: screen region: panel base %#lx -> phys %#llx, rowbytes %lu %lux%lu\n",
++			    PE_state.video.v_baseAddr, fb_phys, PE_state.video.v_rowBytes,
++			    PE_state.video.v_width, PE_state.video.v_height);
++		}
++	}
+ 	printf("mi8gpu: PROBE-BUILD-6 (g3d_smmu_setup markers)\n");
+ 	GS_MARK("a: tables for the 3D address space");
+ 	if (kmem_alloc(kernel_map, &g3d_tables, round_page(G3D_TABLE_POOL), KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
