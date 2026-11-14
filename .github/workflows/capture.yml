@@ -24,7 +24,8 @@ concurrency:
 
 jobs:
   capture:
-    runs-on: ubuntu-latest
+    # 26.04 (glibc 2.42) breaks Mesa 24.3.4 in c11/threads.h: use the LTS image
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -48,8 +49,7 @@ jobs:
         run: |
           cd mesa
           patch -p1 --forward --fuzz=3 < ../capture/mesa-drm-shim-a610.patch || echo "a610 patch did not apply cleanly"
-          patch -p1 --forward --fuzz=3 < ../capture/mesa-drm-shim-a630.patch || echo "a630 patch did not apply cleanly"
-          grep -n 'gpu_id = 63' src/freedreno/drm-shim/freedreno_noop.c || true
+          grep -n 'gpu_id = 630' src/freedreno/drm-shim/freedreno_noop.c || true
           grep -n 'FD_VA_START' src/freedreno/drm-shim/freedreno_noop.c || true
 
       - name: Configure and build
