@@ -1,0 +1,100 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2613,43 +2613,65 @@
+ 	}
+ 	printf("mi8gpu: SECVID_TRUST_CNTL before: %#x\n", rd(gpu3d + 4 * 0xf400));
+ 	/* Needs only a working CP, so it runs before anything about secure mode. */
++#define MTM_DST_LO  0xfffffffdu
++#define MTM_DST_HI  0xfffffffcu
++#define MTM_SRC_LO  0xfffffffbu
++#define MTM_SRC_HI  0xfffffffau
+ 	{
+-		uint32_t shape = 0;
+-
+-		if (PE_parse_boot_argn("mi8gpu_memtomem", &shape, sizeof(shape)) && shape) {
++		uint32_t run = 0;
++
++		if (PE_parse_boot_argn("mi8gpu_memtomem", &run, sizeof(run)) && run) {
++			static const struct {
++				const char *name;
++				uint32_t words[8];
++				uint32_t n;
++			} tries[] = {
++				{ "A  0,dst,src",          { 0, MTM_DST_LO, MTM_DST_HI, MTM_SRC_LO, MTM_SRC_HI }, 5 },
++				{ "B  63,dst,src",         { 63, MTM_DST_LO, MTM_DST_HI, MTM_SRC_LO, MTM_SRC_HI }, 5 },
++				{ "C  64,dst,src",         { 64, MTM_DST_LO, MTM_DST_HI, MTM_SRC_LO, MTM_SRC_HI }, 5 },
++				{ "D  0,dst,src,64",       { 0, MTM_DST_LO, MTM_DST_HI, MTM_SRC_LO, MTM_SRC_HI, 64 }, 6 },
++				{ "E  64,dst,src,0",       { 64, MTM_DST_LO, MTM_DST_HI, MTM_SRC_LO, MTM_SRC_HI, 0 }, 6 },
++				{ "F  0,0,dst,src",        { 0, 0, MTM_DST_LO, MTM_DST_HI, MTM_SRC_LO, MTM_SRC_HI }, 6 },
++			};
+ 			uint32_t *src_ = (uint32_t *)((uintptr_t)memptrs + 0x800);
+ 			uint32_t *dst_ = (uint32_t *)((uintptr_t)memptrs + 0x900);
+ 			uint64_t src_iova = g3d_regions[2].address + 0x800;
+ 			uint64_t dst_iova = g3d_regions[2].address + 0x900;
+-			uint32_t i_;
+-
+-			for (i_ = 0; i_ < 64; i_++) {
+-				src_[i_] = 0xdead0000u + i_;
+-				dst_[i_] = 0;
++
++			for (uint32_t v_ = 0; v_ < sizeof(tries) / sizeof(tries[0]); v_++) {
++				uint32_t i_;
++
++				for (i_ = 0; i_ < 64; i_++) {
++					src_[i_] = 0xdead0000u + i_;
++					dst_[i_] = 0;
++				}
++				to_memory((vm_offset_t)memptrs, 0x1000);
++				ring[wptr++] = pkt7(0x73u, tries[v_].n);
++				for (i_ = 0; i_ < tries[v_].n; i_++) {
++					uint32_t w_ = tries[v_].words[i_];
++
++					if (w_ == MTM_DST_LO) w_ = (uint32_t)dst_iova;
++					else if (w_ == MTM_DST_HI) w_ = (uint32_t)(dst_iova >> 32);
++					else if (w_ == MTM_SRC_LO) w_ = (uint32_t)src_iova;
++					else if (w_ == MTM_SRC_HI) w_ = (uint32_t)(src_iova >> 32);
++					ring[wptr++] = w_;
++				}
++				{
++					bool mtm_ok = gpu_wait_ring(wptr, "after CP_MEM_TO_MEM");
++
++					to_memory((vm_offset_t)memptrs, 0x1000);
++					printf("mi8gpu: MTM %s: %s, dst %08x %08x %08x %08x %08x %08x %08x %08x\n",
++					    tries[v_].name, mtm_ok ? "ring consumed" : "ring NOT consumed",
++					    dst_[0], dst_[1], dst_[2], dst_[3], dst_[4], dst_[5], dst_[6], dst_[7]);
++				}
++				cp_wptr = wptr;
+ 			}
+-			to_memory((vm_offset_t)memptrs, 0x1000);
+-			ring[wptr++] = pkt7(0x73u, shape == 1 ? 5u : 6u);
+-			ring[wptr++] = 0;
+-			ring[wptr++] = (uint32_t)dst_iova;
+-			ring[wptr++] = (uint32_t)(dst_iova >> 32);
+-			ring[wptr++] = (uint32_t)src_iova;
+-			ring[wptr++] = (uint32_t)(src_iova >> 32);
+-			if (shape != 1) {
+-				ring[wptr++] = 64;
+-			}
+-			printf("mi8gpu: CP_MEM_TO_MEM shape %u submitted (src %#llx dst %#llx)\n",
+-			    shape, src_iova, dst_iova);
+-			{
+-				bool mtm_ok = gpu_wait_ring(wptr, "after CP_MEM_TO_MEM");
+-
+-				to_memory((vm_offset_t)memptrs, 0x1000);
+-				printf("mi8gpu: CP_MEM_TO_MEM %s: RBBM_STATUS %#x INT_0 %#x; dst[0..3] %08x %08x %08x %08x (expected dead0000 dead0001 dead0002 dead0003)\n",
+-				    mtm_ok ? "ring consumed" : "ring NOT consumed", rd(gpu3d + 4 * 0x0210),
+-				    rd(gpu3d + 4 * 0x0201), dst_[0], dst_[1], dst_[2], dst_[3]);
+-			}
+-			cp_wptr = wptr;
+-		}
+-	}
++		}
++	}
++#undef MTM_DST_LO
++#undef MTM_DST_HI
++#undef MTM_SRC_LO
++#undef MTM_SRC_HI
+ 	{
+ 		uint32_t skipzap = 0;
+ 
