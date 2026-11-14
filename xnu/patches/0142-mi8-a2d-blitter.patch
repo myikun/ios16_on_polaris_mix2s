@@ -1,0 +1,197 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1195,6 +1195,18 @@
+ 	uint64_t t_gs = 0;
+ 	uint32_t region_pages = 0;
+ 	const uint8_t *fw = redwood_wifi_file("a630_sqe.fw", &fw_size);
++
++	/* The screen region must be this phone's frame buffer, not dipper's address. */
++	if (PE_state.video.v_baseAddr != 0 && PE_state.video.v_rowBytes != 0) {
++		uint64_t fb_phys = (uint64_t)kvtophys((vm_offset_t)PE_state.video.v_baseAddr);
++
++		if (fb_phys != 0) {
++			g3d_regions[3].phys = fb_phys;
++			printf("mi8gpu: screen region: panel base %#lx -> phys %#llx, rowbytes %lu %lux%lu\n",
++			    PE_state.video.v_baseAddr, fb_phys, PE_state.video.v_rowBytes,
++			    PE_state.video.v_width, PE_state.video.v_height);
++		}
++	}
+ 	uint32_t gsstop = 0;
+ 
+ 	PE_parse_boot_argn("mi8gpu_gsstop", &gsstop, sizeof(gsstop));
+@@ -2474,6 +2486,14 @@
+ 	return (0x9669 >> (0xF & (val ^ (val >> 4) ^ (val >> 8) ^ (val >> 12) ^ (val >> 16) ^ (val >> 20) ^ (val >> 24) ^ (val >> 28)))) & 1;
+ }
+ 
++/* Type-4 packet: write cnt registers starting at reg (odd parity, as the CP wants). */
++static uint32_t
++pkt4(uint32_t reg, uint32_t cnt)
++{
++	return 0x40000000u | cnt | (pm4_parity(cnt) << 7) | ((reg & 0x3ffffu) << 8) |
++	    (pm4_parity(reg) << 27);
++}
++
+ static uint32_t
+ pkt7(uint32_t opcode, uint32_t cnt)
+ {
+@@ -2601,6 +2621,145 @@
+ 	return rptr == wptr && !(rd(gpu3d + 4 * 0x0210) & ~0x1u);
+ }
+ 
++
++/* ---- the Adreno 2D blitter (A2D), ported from the sapphire a610 port --------
++ *
++ * GRAS/TPL1/RB carry a small 2D engine: a buffer descriptor, a rectangle and one
++ * CP_BLIT. No shader, no 3D pipeline. sapphire uses it for the per-frame copy of
++ * iOS's surface into the panel (110 us against 5 ms for the CPU copy).
++ */
++#define REG_RB_RBP_CNTL                 0x8e01
++#define REG_RB_DBG_ECO_CNTL             0x8e04
++#define REG_RB_CCU_CNTL                 0x8e07
++#define REG_RB_A2D_BLT_CNTL             0x8c00
++#define REG_RB_A2D_PIXEL_CNTL           0x8c01
++#define REG_RB_A2D_DEST_BUFFER_INFO     0x8c17
++#define REG_RB_A2D_CLEAR_COLOR_DW0      0x8c2c
++#define REG_GRAS_A2D_BLT_CNTL           0x8400
++#define REG_GRAS_A2D_SRC_XMIN           0x8401
++#define REG_GRAS_A2D_DEST_TL            0x8405
++#define REG_SP_A2D_OUTPUT_INFO          0xacc0
++#define REG_TPL1_A2D_SRC_TEXTURE_INFO   0xb4c0
++#define FMT6_8_8_8_8_UNORM              0x30
++#define RM6_BLIT2DSCALE                 12
++#define BLIT_OP_SCALE                   3
++#define CP_BLIT_OPCODE                  0x2cu
++#define CP_SET_MARKER_OPCODE            0x65u
++#define CP_WAIT_FOR_IDLE_OPCODE         0x26u
++#define CP_EVENT_WRITE_OPCODE           0x46u
++#define EV_PC_CCU_FLUSH_COLOR_TS        0x1d
++#define EV_PC_CCU_FLUSH_DEPTH_TS        0x1c
++#define EV_PC_CCU_INVALIDATE_COLOR      0x19
++#define EV_PC_CCU_INVALIDATE_DEPTH      0x18
++#define EV_CACHE_FLUSH_TS               0x04
++#define EV_DEBUG_LABEL                  0x3f
++
++/* Emit the batch-start registers and the blit state for a solid fill. */
++static void
++blit_setup_solid(uint32_t *ring, uint32_t *w, uint32_t rgba)
++{
++	uint32_t blt = (0xfu << 20) | (FMT6_8_8_8_8_UNORM << 8) | (1u << 7);
++
++#define BR(v) (ring[(*w)++ & 8191u] = (v))
++#define BREG(r, v) do { BR(pkt4((r), 1)); BR(v); } while (0)
++	BREG(0x9804, 0xf);                       /* PC_MODE_CNTL */
++	BREG(0x9805, 0);                         /* PC_POWER_CNTL */
++	BREG(0xa0f8, 0);                         /* VFD_POWER_CNTL */
++	BREG(0xb600, 0);                         /* TPL1_DBG_ECO_CNTL */
++	BREG(0x8600, 0);                         /* GRAS_DBG_ECO_CNTL */
++	BREG(0xae03, 0);                         /* SP_CHICKEN_BITS */
++	BREG(0xae00, 0);                         /* SP_DBG_ECO_CNTL */
++	BREG(0xbe04, 0);                         /* HLSQ_DBG_ECO_CNTL */
++	BREG(0x9600, 0);                         /* VPC_DBG_ECO_CNTL */
++	BREG(0x0e12, 0x10000000);                /* UCHE_UNKNOWN_0E12 */
++	BREG(REG_RB_RBP_CNTL, 1);
++	BREG(REG_RB_DBG_ECO_CNTL, 0x04100000);
++
++	/* CCU: flush what is there, invalidate, then sysmem layout */
++	BR(pkt7(CP_EVENT_WRITE_OPCODE, 1)); BR(EV_PC_CCU_FLUSH_COLOR_TS);
++	BR(pkt7(CP_EVENT_WRITE_OPCODE, 1)); BR(EV_PC_CCU_FLUSH_DEPTH_TS);
++	BR(pkt7(CP_EVENT_WRITE_OPCODE, 1)); BR(EV_PC_CCU_INVALIDATE_COLOR);
++	BR(pkt7(CP_EVENT_WRITE_OPCODE, 1)); BR(EV_PC_CCU_INVALIDATE_DEPTH);
++	BR(pkt7(CP_SET_MARKER_OPCODE, 1)); BR(RM6_BLIT2DSCALE);
++	BR(pkt7(CP_WAIT_FOR_IDLE_OPCODE, 0));
++	BREG(REG_RB_CCU_CNTL, (1u << 0) | ((0x2000u >> 12) << 23));
++
++	/* clear colour, one byte per dword in the format's channel order */
++	BR(pkt4(REG_RB_A2D_CLEAR_COLOR_DW0, 4));
++	BR((rgba >> 24) & 0xffu);
++	BR((rgba >> 16) & 0xffu);
++	BR((rgba >> 8) & 0xffu);
++	BR(rgba & 0xffu);
++
++	BREG(REG_RB_A2D_BLT_CNTL, blt);
++	BREG(REG_GRAS_A2D_BLT_CNTL, blt);
++	BREG(REG_SP_A2D_OUTPUT_INFO, (FMT6_8_8_8_8_UNORM << 3) | (0xfu << 12));
++	BREG(REG_RB_A2D_PIXEL_CNTL, 0);
++#undef BREG
++}
++
++/* One filled rectangle at base (linear, pitch a multiple of 64). */
++static void
++blit_rect_solid(uint32_t *ring, uint32_t *w, uint64_t base, uint32_t pitch,
++    uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
++{
++#define BR(v) (ring[(*w)++ & 8191u] = (v))
++	BR(pkt4(REG_RB_A2D_DEST_BUFFER_INFO, 4));
++	BR(FMT6_8_8_8_8_UNORM);
++	BR((uint32_t)base);
++	BR((uint32_t)(base >> 32));
++	BR(pitch >> 6);
++	BR(pkt4(REG_GRAS_A2D_DEST_TL, 2));
++	BR(x0 | (y0 << 16));
++	BR(x1 | (y1 << 16));
++	BR(pkt7(CP_EVENT_WRITE_OPCODE, 1));
++	BR(EV_DEBUG_LABEL);
++	BR(pkt7(CP_BLIT_OPCODE, 1));
++	BR(BLIT_OP_SCALE);
++#undef BR
++}
++
++/* Fill the whole panel with one colour, through the GPU, and wait for it. */
++static bool
++polaris_blit_fill(uint32_t rgba)
++{
++	uint32_t *ring = (uint32_t *)g3d_regions[1].memory;
++	uint32_t w = cp_wptr & 8191u;
++	uint64_t base = G3D_FB_IOVA;
++	uint32_t pitch = G3D_FB_WIDTH * 4u;
++	uint32_t lines = G3D_FB_HEIGHT;
++
++	printf("mi8gpu: A2D fill %08x at iova %#llx pitch %u lines %u (ring wptr %u)\n",
++	    rgba, base, pitch, lines, w);
++	blit_setup_solid(ring, &w, rgba);
++	blit_rect_solid(ring, &w, base, pitch, 0, 0, G3D_FB_WIDTH - 1, lines - 1);
++	/* flush what the CP will read, publish the write pointer, wait for the CP */
++	ring[w++ & 8191u] = pkt7(CP_EVENT_WRITE_OPCODE, 1);
++	ring[w++ & 8191u] = EV_CACHE_FLUSH_TS;
++	ring[w++ & 8191u] = pkt7(CP_WAIT_FOR_IDLE_OPCODE, 0);
++	to_memory(g3d_regions[1].memory, g3d_regions[1].size);
++	wr(gpu3d + 4 * 0x0807, w & 8191u);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	{
++		bool done = false;
++		uint32_t rptr = 0;
++
++		for (uint32_t i = 0; i < 2000; i++) {
++			rptr = rd(gpu3d + 4 * 0x0806);
++			if (rptr == (w & 8191u)) {
++				done = true;
++				break;
++			}
++			sleep_us(100);
++		}
++		cp_wptr = w;
++		printf("mi8gpu: A2D fill %s: RB_RPTR %u WPTR %u, RBBM_STATUS %#x CP_HW_FAULT %#x INT_0 %#x\n",
++		    done ? "consumed" : "NOT consumed", rptr, w & 8191u,
++		    rd(gpu3d + 4 * 0x0210), rd(gpu3d + 4 * 0x0821), rd(gpu3d + 4 * 0x0201));
++		return done;
++	}
++}
++
+ static void
+ gpu_zap_and_command(void)
+ {
+@@ -2612,6 +2771,13 @@
+ 		return;
+ 	}
+ 	printf("mi8gpu: SECVID_TRUST_CNTL before: %#x\n", rd(gpu3d + 4 * 0xf400));
++	{
++		uint32_t rgba = 0;
++
++		if (PE_parse_boot_argn("mi8gpu_blit", &rgba, sizeof(rgba)) && rgba != 0) {
++			polaris_blit_fill(rgba);
++		}
++	}
+ 	/* Needs only a working CP, so it runs before anything about secure mode. */
+ #define MTM_DST_LO  0xfffffffdu
+ #define MTM_DST_HI  0xfffffffcu
