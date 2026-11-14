@@ -1,0 +1,55 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2406,14 +2406,35 @@
+ 	    rd(gpucc + 0x100c), rd(gpucc + 0x1508), rd(gpucc + 0x1008));
+ 	printf("mi8gpu: reading CP_SQE_CNTL (0x5000020) now; if this is the last line, that read stalls\n");
+ 	/* GX registers survive a slumber (EXP-0108: HWCG was still on): make sure the CP of an earlier run is halted first */
+-	printf("mi8gpu: CP_SQE_CNTL was %#x, RB_RPTR %u WPTR %u; halting it before the setup\n", rd(gpu3d + 4 * 0x0808), rd(gpu3d + 4 * 0x0806), rd(gpu3d + 4 * 0x0807));
++	{
++		printf("mi8gpu: CP_SQE_CNTL was %#x, RB_RPTR %u WPTR %u; setup begins\n",
++		    rd(gpu3d + 4 * 0x0808), rd(gpu3d + 4 * 0x0806), rd(gpu3d + 4 * 0x0807));
++		uint32_t stop = 0, n = 0;
++
++		PE_parse_boot_argn("mi8gpu_stop", &stop, sizeof(stop));
++#define PT_CP_MARK(text) do { \
++			n++; \
++			printf("mi8gpu: cp %u of 7: " text "\n", n); \
++			for (int f = 0; f < 12; f++) { \
++				sleep_us(100000); \
++			} \
++			if (stop != 0 && n >= stop) { \
++				printf("mi8gpu: cp %u of 7: stopping here (mi8gpu_stop=%u)\n", n, stop); \
++				return; \
++			} \
++		} while (0)
++		PT_CP_MARK("CP_SQE_CNTL=0 (halt the CP)");
+ 	gpu_put(0x0808, 0, "REG_A6XX_CP_SQE_CNTL (halt)");
++		PT_CP_MARK("RB_WPTR=0");
+ 	wr(gpu3d + 4 * 0x0807, 0);
+ 	/* hw_init: SQE_INSTR_BASE, RB_BASE, RB_CNTL (default size/block with NO_UPDATE: no hw_apriv on a630) */
++		PT_CP_MARK("SQE_INSTR_BASE lo/hi");
+ 	gpu_put(0x0830, (uint32_t)g3d_regions[0].address, "REG_A6XX_CP_SQE_INSTR_BASE_LO");
+ 	gpu_put(0x0831, (uint32_t)(g3d_regions[0].address >> 32), "REG_A6XX_CP_SQE_INSTR_BASE_HI");
++		PT_CP_MARK("RB_BASE lo/hi");
+ 	gpu_put(0x0800, (uint32_t)g3d_regions[1].address, "REG_A6XX_CP_RB_BASE_LO");
+ 	gpu_put(0x0801, (uint32_t)(g3d_regions[1].address >> 32), "REG_A6XX_CP_RB_BASE_HI");
++		PT_CP_MARK("RB_CNTL");
+ 	gpu_put(0x0802, (12u | (2u << 8) | (1u << 27)), "REG_A6XX_CP_RB_CNTL");
+ 	/* a6xx_cp_init: CP_ME_INIT with 8 words */
+ 	ring[wptr++] = pkt7(CP_ME_INIT_OPCODE, 8);
+@@ -2422,9 +2443,14 @@
+ 	}
+ 	to_memory(g3d_regions[1].memory, g3d_regions[1].size);
+ 	printf("mi8gpu: ring: %u words, first %#010x %#010x %#010x; CP_SQE_CNTL <- 1\n", wptr, ring[0], ring[1], ring[2]);
++		PT_CP_MARK("SQE_CNTL=1 (start the CP)");
+ 	gpu_put(0x0808, 1, "REG_A6XX_CP_SQE_CNTL");
+ 	printf("mi8gpu: CP_RB_WPTR <- %u (a6xx_flush)\n", wptr);
++		PT_CP_MARK("RB_WPTR kick (a6xx_flush)");
+ 	wr(gpu3d + 4 * 0x0807, wptr);
++		printf("mi8gpu: cp: all 7 markers passed; waiting for the ring\n");
++	}
++#undef PT_CP_MARK
+ 	__asm__ volatile ("dsb sy" ::: "memory");
+ 	for (uint32_t i = 0; i < 500; i++) {
+ 		rptr = rd(gpu3d + 4 * 0x0806);
