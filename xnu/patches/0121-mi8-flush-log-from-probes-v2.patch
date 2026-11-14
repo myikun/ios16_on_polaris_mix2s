@@ -1,0 +1,56 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -43,4 +43,11 @@
+ static uint64_t _Atomic sweet_log_total;
+ static int sweet_log_chan;
+ 
++/* Called from probes that are about to touch a register which can stall the bus. */
++void
++sweet_log_wake(void)
++{
++	wakeup(&sweet_log_chan);
++}
++
+ void sweet_log_append(const char *c, int size);
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2270,6 +2270,10 @@
+ #define GMU_PWR_CNT_ENABLE_W    0x5040u
+ #define GMU_PWR_CNT_SELECT0_W   0x5041u         /* GMU_CX_GMU_POWER_COUNTER_SELECT_0 0x1f841 */
+ 
++/* bsd/dev/sweet_ufs.c: nudge the console ring writer (the probes call it) */
++extern void sweet_log_wake(void);
++/* a string a build can be checked for: this probe set is the one that flushes */
++
+ static uint32_t gpu_writes, gpu_differs;
+ 
+ static void
+@@ -2407,7 +2411,8 @@
+ 	printf("mi8gpu: reading CP_SQE_CNTL (0x5000020) now; if this is the last line, that read stalls\n");
+ 	/* GX registers survive a slumber (EXP-0108: HWCG was still on): make sure the CP of an earlier run is halted first */
+ 	{
+-		printf("mi8gpu: CP_SQE_CNTL was %#x, RB_RPTR %u WPTR %u; setup begins\n",
++		printf("mi8gpu: PROBE-BUILD-4 (probes flush the log)\n");
++	printf("mi8gpu: CP_SQE_CNTL was %#x, RB_RPTR %u WPTR %u; setup begins\n",
+ 		    rd(gpu3d + 4 * 0x0808), rd(gpu3d + 4 * 0x0806), rd(gpu3d + 4 * 0x0807));
+ 		uint32_t stop = 0, n = 0;
+ 
+@@ -2415,7 +2420,8 @@
+ #define PT_CP_MARK(text) do { \
+ 			n++; \
+ 			printf("mi8gpu: cp %u of 7: " text "\n", n); \
+-			for (int f = 0; f < 12; f++) { \
++			sweet_log_wake(); \
++			for (int f = 0; f < 4; f++) { \
+ 				sleep_us(100000); \
+ 			} \
+ 			if (stop != 0 && n >= stop) { \
+@@ -4218,6 +4224,7 @@
+ static void
+ teardown(void)
+ {
++	printf("mi8gpu: teardown begins\n");
+ 	if (gmu_unsafe) {
+ 		printf("mi8gpu: the GMU or RSC may not be stopped; retaining clocks, CX, tables and SMMU memory\n");
+ 		return;
