@@ -1,0 +1,109 @@
+name: capture
+
+# Builds Mesa's turnip for an Adreno 630 behind the no-op DRM shim and records the
+# command streams of the three operations a compositor needs: a clear, a textured
+# blended quad and a blit. The .rd replay files and their cffdump disassembly are
+# the reference for the kernel side -- the exact 3D state and shader binaries an
+# a630 accepts, instead of hand-written guesses.
+#
+# Nothing here touches the phone: it runs on an Ubuntu runner and uploads data.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_ref:
+        description: Mesa tag or branch to build
+        default: "mesa-24.3.4"
+      gpu_id:
+        description: Adreno id the shim reports (630 = polaris)
+        default: "630"
+
+concurrency:
+  group: capture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config python3-mako python3-setuptools \
+            libexpat1-dev libdrm-dev libzstd-dev zlib1g-dev \
+            glslang-tools bison flex patch ca-certificates git
+
+      - name: Fetch Mesa
+        run: |
+          git clone --depth 1 --branch "${{ inputs.mesa_ref }}" \
+            https://gitlab.freedesktop.org/mesa/mesa.git mesa \
+            || git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git mesa
+          git -C mesa log -1 --oneline
+
+      - name: Patch the DRM shim (sapphire's options, polaris' id)
+        run: |
+          cd mesa
+          patch -p1 --forward --fuzz=3 < ../capture/mesa-drm-shim-a610.patch || echo "a610 patch did not apply cleanly"
+          patch -p1 --forward --fuzz=3 < ../capture/mesa-drm-shim-a630.patch || echo "a630 patch did not apply cleanly"
+          grep -n 'gpu_id = 63' src/freedreno/drm-shim/freedreno_noop.c || true
+          grep -n 'FD_VA_START' src/freedreno/drm-shim/freedreno_noop.c || true
+
+      - name: Configure and build
+        run: |
+          cd mesa
+          meson setup build \
+            -Dbuildtype=release \
+            -Dplatforms= \
+            -Dglx=disabled \
+            -Dllvm=disabled \
+            -Dgallium-drivers= \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=msm \
+            -Dtools=freedreno
+          ninja -C build
+
+      - name: Build the capture program
+        run: |
+          cd capture
+          mkdir -p out
+          glslangValidator -V --vn quad_vert -o out/quad.vert.h quad.vert
+          glslangValidator -V --vn quad_frag -o out/quad.frag.h quad.frag
+          cc -O1 -g -I"$GITHUB_WORKSPACE/mesa/include" -Iout -o out/cap cap.c -ldl
+
+      - name: Capture
+        run: |
+          set -x
+          B="$GITHUB_WORKSPACE/mesa/build"
+          SHIM="$B/src/freedreno/drm-shim/libfreedreno_noop_drm_shim.so"
+          ICD="$B/src/freedreno/vulkan/libvulkan_freedreno.so"
+          CFF="$B/src/freedreno/decode/cffdump"
+          ls -l "$SHIM" "$ICD" "$CFF" || true
+          mkdir -p out
+          TAG="polaris_$$"
+          # the program draws a clear, a textured blended quad and a blit in one
+          # submission; the shim writes one replay file per submission to /tmp
+          FD_GPU_ID="${{ inputs.gpu_id }}" \
+          FD_VA_START=0x30000000 FD_VA_SIZE=0x08000000 \
+          TU_DEBUG=sysmem FD_RD_DUMP=enable,full FD_RD_DUMP_TESTNAME="$TAG" \
+          LD_PRELOAD="$SHIM" ./capture/out/cap "$ICD" || echo "capture failed"
+          ls -l /tmp/*.rd || true
+          i=0
+          for f in /tmp/${TAG}*.rd; do
+            [ -e "$f" ] || continue
+            i=$((i + 1))
+            cp "$f" "out/cap-$i.rd"
+            "$CFF" --no-color --no-pager "out/cap-$i.rd" > "out/cap-$i.txt" 2>&1 || true
+          done
+          echo "captured $i submission(s)"
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capture-a630
+          path: out/
+          if-no-files-found: warn
