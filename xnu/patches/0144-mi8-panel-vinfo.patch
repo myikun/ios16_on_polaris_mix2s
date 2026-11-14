@@ -1,0 +1,44 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1244,14 +1244,32 @@
+ 	absolutetime_to_nanoseconds(mach_absolute_time() - (since), &_ns); _ns / 1000; })
+ #define GS_MARK(text) printf("mi8gpu: gs: " text "\n")
+ 	/* The screen region must be this phone's frame buffer, not dipper's address. */
+-	if (PE_state.video.v_baseAddr != 0 && PE_state.video.v_rowBytes != 0) {
+-		uint64_t fb_phys = (uint64_t)kvtophys((vm_offset_t)PE_state.video.v_baseAddr);
+-
+-		if (fb_phys != 0) {
+-			g3d_regions[3].phys = fb_phys;
+-			printf("mi8gpu: screen region: panel base %#lx -> phys %#llx, rowbytes %lu %lux%lu\n",
+-			    PE_state.video.v_baseAddr, fb_phys, PE_state.video.v_rowBytes,
+-			    PE_state.video.v_width, PE_state.video.v_height);
++	{
++		vm_offset_t fb_va = 0;
++		uint32_t fb_row = 0, fb_w = 0, fb_h = 0;
++
++		printf("mi8gpu: screen sources: PE_state base %#lx rowbytes %lu %lux%lu | vinfo base %#lx rowbytes %u %ux%u\n",
++		    PE_state.video.v_baseAddr, PE_state.video.v_rowBytes, PE_state.video.v_width,
++		    PE_state.video.v_height, vinfo.v_baseaddr, vinfo.v_rowbytes, vinfo.v_width, vinfo.v_height);
++		if (vinfo.v_baseaddr != 0 && vinfo.v_rowbytes != 0) {
++			fb_va = vinfo.v_baseaddr;
++			fb_row = vinfo.v_rowbytes;
++			fb_w = vinfo.v_width;
++			fb_h = vinfo.v_height;
++		} else if (PE_state.video.v_baseAddr != 0 && PE_state.video.v_rowBytes != 0) {
++			fb_va = PE_state.video.v_baseAddr;
++			fb_row = PE_state.video.v_rowBytes;
++			fb_w = PE_state.video.v_width;
++			fb_h = PE_state.video.v_height;
++		}
++		if (fb_va != 0) {
++			uint64_t fb_phys = (uint64_t)kvtophys(fb_va);
++
++			if (fb_phys != 0) {
++				g3d_regions[3].phys = fb_phys;
++				printf("mi8gpu: screen region: base %#lx -> phys %#llx, rowbytes %u %ux%u\n",
++				    fb_va, fb_phys, fb_row, fb_w, fb_h);
++			}
+ 		}
+ 	}
+ 	printf("mi8gpu: PROBE-BUILD-6 (g3d_smmu_setup markers)\n");
