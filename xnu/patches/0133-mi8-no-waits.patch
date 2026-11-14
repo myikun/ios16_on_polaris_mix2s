@@ -1,0 +1,63 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1218,16 +1218,7 @@
+ 	}
+ #define GS_US(since) ({ uint64_t _ns; \
+ 	absolutetime_to_nanoseconds(mach_absolute_time() - (since), &_ns); _ns / 1000; })
+-#define GS_MARK(text) do { \
+-		uint32_t nw_ = 0; \
+-		printf("mi8gpu: gs: " text "\n"); \
+-		if (!(PE_parse_boot_argn("mi8gpu_nowait", &nw_, sizeof(nw_)) && nw_)) { \
+-			for (int f = 0; f < 25; f++) { \
+-				sleep_us(100000); \
+-			} \
+-		} \
+-		printf("mi8gpu: gs: " text " [wait done]\n"); \
+-	} while (0)
++#define GS_MARK(text) printf("mi8gpu: gs: " text "\n")
+ 	printf("mi8gpu: PROBE-BUILD-6 (g3d_smmu_setup markers)\n");
+ 	GS_MARK("a: tables for the 3D address space");
+ 	if (kmem_alloc(kernel_map, &g3d_tables, round_page(G3D_TABLE_POOL), KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+@@ -2487,9 +2478,6 @@
+ #define PT_CP_MARK(text) do { \
+ 			n++; \
+ 			printf("mi8gpu: cp %u of 7: " text "\n", n); \
+-			for (int f = 0; f < 25; f++) { \
+-				sleep_us(100000); \
+-			} \
+ 			if (stop != 0 && n >= stop) { \
+ 				printf("mi8gpu: cp %u of 7: stopping here (mi8gpu_stop=%u)\n", n, stop); \
+ 				return; \
+@@ -4518,17 +4506,6 @@
+ #define STEPS ((uint32_t)(sizeof(steps) / sizeof(steps[0])))
+ 
+ 
+-/* A second thread that keeps talking while the bring-up runs: if these stop too,
+- * the kernel died (a panic), not just the GPU thread. */
+-static void
+-mi8_heartbeat_thread(__unused void *arg, __unused wait_result_t wr)
+-{
+-	for (uint32_t n = 0; n < 600; n++) {
+-		printf("mi8gpu: alive %u\n", n);
+-		delay_for_interval(500, 1000000);
+-	}
+-}
+-
+ static void
+ mi8_adreno_thread(void *parameter, __unused wait_result_t result)
+ {
+@@ -4727,13 +4704,6 @@
+ 	if (kernel_thread_start(mi8_adreno_thread, (void *)(uintptr_t)last, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+ 	}
+-	if (last >= 18) {
+-		thread_t beat;
+-
+-		if (kernel_thread_start(mi8_heartbeat_thread, NULL, &beat) == KERN_SUCCESS) {
+-			thread_deallocate(beat);
+-		}
+-	}
+ }
+ 
+ /* The calling thread runs on processor `cpu` from now on (the display driver's scaling threads: EXP-0117). */
