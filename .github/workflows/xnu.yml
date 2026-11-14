@@ -126,6 +126,8 @@ jobs:
           path: |
             dxb/xnu/bsd/dev/polaris_touch_i2c.c
             dxb/xnu/bsd/dev/polaris_gpu_fw.c
+            dxb/xnu/iokit/Kernel/arm/SweetPlatformExpert.cpp
+            dxb/xnu/bsd/sweet_hfs/sweet_hfs_iokit.c
           if-no-files-found: warn
 
       - name: Collect
