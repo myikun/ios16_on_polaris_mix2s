@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Deps
         run: |
-          brew install meson ninja bison flex llvm python3 || true
+          brew install meson ninja bison flex llvm python3 lxml || true
           export PATH="$(brew --prefix llvm)/bin:$PATH"
           meson --version; ninja --version; llvm-strip --version | head -1
 
@@ -61,7 +61,11 @@ jobs:
       - name: Configure and build
         run: |
           V=${{ inputs.mesa_version }}
-          export PATH="$PWD/venv/bin:$(brew --prefix llvm)/bin:$PATH"
+          # bison and flex first: macOS ships bison 2.3, which cannot parse
+          # Mesa's ir3 grammar ("invalid directive: %code")
+          export PATH="$PWD/venv/bin:$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
+          echo "bison: $(bison --version | head -1)"
+          echo "flex:  $(flex --version | head -1)"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK=$SDK"
           cat > cross.ini <<INI
