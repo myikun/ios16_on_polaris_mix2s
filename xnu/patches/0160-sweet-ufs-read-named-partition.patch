@@ -1,0 +1,106 @@
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -259,6 +259,69 @@
+ 	return ENOENT;
+ }
+ 
++/*
++ * Read len bytes at byte offset of the GPT partition named want into dst, and
++ * report its size. The WiFi driver (bsd/dev/mi8_rproc.c) reads the WCN3990's
++ * firmware out of the "modem" partition with these; nothing writes.
++ */
++int
++sweet_ufs_partition_size(const char *want, uint64_t *size)
++{
++	int error;
++
++	if (!su.ready || want == NULL || size == NULL) {
++		return ENXIO;
++	}
++	lck_mtx_lock(&sweet_ufs_lock);
++	error = ufs_find_partition(want);
++	if (!error) {
++		*size = su.nblocks * UFS_BLOCK;
++	}
++	lck_mtx_unlock(&sweet_ufs_lock);
++	return error;
++}
++
++int
++sweet_ufs_read_partition(const char *want, uint64_t offset, void *dst, uint64_t len)
++{
++	const uint8_t *bounce = (const uint8_t *)(su.dma + DMA_BOUNCE);
++	uint8_t *out = (uint8_t *)dst;
++	uint64_t done = 0;
++	int error = 0;
++
++	if (!su.ready || want == NULL || dst == NULL) {
++		return ENXIO;
++	}
++	lck_mtx_lock(&sweet_ufs_lock);
++	error = ufs_find_partition(want);
++	if (error) {
++		lck_mtx_unlock(&sweet_ufs_lock);
++		return error;
++	}
++	if (offset + len > su.nblocks * (uint64_t)UFS_BLOCK) {
++		lck_mtx_unlock(&sweet_ufs_lock);
++		return EINVAL;
++	}
++	while (done < len) {
++		uint64_t pos = offset + done;
++		uint64_t lba = su.first_block + pos / UFS_BLOCK;
++		uint32_t skip = (uint32_t)(pos % UFS_BLOCK);
++		uint32_t blocks = (uint32_t)((len - done + skip + UFS_BLOCK - 1) / UFS_BLOCK);
++		uint32_t chunk = blocks > (BOUNCE_SIZE / UFS_BLOCK) ? (BOUNCE_SIZE / UFS_BLOCK) : blocks;
++		uint32_t avail = chunk * UFS_BLOCK - skip;
++		uint32_t n = (len - done) < avail ? (uint32_t)(len - done) : avail;
++
++		error = ufs_read_blocks(lba, chunk);
++		if (error) {
++			break;
++		}
++		memcpy(out + done, bounce + skip, n);
++		done += n;
++	}
++	lck_mtx_unlock(&sweet_ufs_lock);
++	return error;
++}
++
+ static int
+ ufs_take_over_host(void)
+ {
+@@ -515,6 +578,32 @@
+ 	su.ready = true;
+ 	printf("SWEET UFS: \"%s\" on LUN %u: first block 0x%llx, %llu MiB, read-only\n",
+ 	    want, su.lun, su.first_block, su.nblocks * UFS_BLOCK >> 20);
++	{
++		int probe = 0;
++
++		/* modemprobe=1: is the firmware volume readable? (WiFi stage 1) */
++		PE_parse_boot_argn("modemprobe", &probe, sizeof(probe));
++		if (probe) {
++			uint64_t msize = 0;
++
++			if (sweet_ufs_partition_size("modem", &msize) == 0) {
++				uint8_t head[512];
++
++				printf("SWEET UFS: modem partition: %llu MiB\n", msize >> 20);
++				if (sweet_ufs_read_partition("modem", 0, head, sizeof(head)) == 0) {
++					printf("SWEET UFS: modem sector 0: %02x%02x%02x %02x%02x%02x %02x%02x%02x "
++					    "oem \"%c%c%c%c%c%c%c%c\" type \"%c%c%c%c%c%c%c%c\"\n",
++					    head[0], head[1], head[2], head[11], head[12], head[13],
++					    head[510], head[511], head[3], head[4], head[5], head[6],
++					    head[7], head[8], head[9], head[10],
++					    head[54], head[55], head[56], head[57], head[58], head[59],
++					    head[60], head[61]);
++				}
++			} else {
++				printf("SWEET UFS: no \"modem\" partition on this LUN\n");
++			}
++		}
++	}
+ 	return 0;
+ }
+ 
