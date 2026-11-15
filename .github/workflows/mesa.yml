@@ -1,91 +1,78 @@
 name: mesa
 
-# Builds Mesa's freedreno for iOS arm64 on a macOS runner: the library that turns
-# the GPU service's buffers and submissions into OpenGL ES. HackiOS's recipe:
-# fetch a pinned Mesa, apply their Darwin patches (freedreno-darwin.patch supplies
-# the libdrm stand-in that calls our kernel service), cross-compile against Xcode's
-# iPhoneOS SDK, and upload libOSMesa.8.dylib.
+# Mesa's freedreno for iOS arm64, built the way HackiOS builds it (tools/mk-mesa.sh),
+# not the way I guessed at for three runs: same Mesa release they pin (25.0.7),
+# ALL of their tools/mesa/*.patch, their libdrm stand-in and AIR frontend copied
+# into the tree at the paths their patches expect, their meson options verbatim.
 #
-# Nothing here touches the phone. The artifact is what a later step installs into
-# the iOS image next to the EAGL shim.
+# Produces libOSMesa.8.dylib (install name /redwood/lib/libOSMesa.8.dylib) -- the
+# library that talks to the kernel's RedwoodGPU service through hakios.drm.c.
 
 on:
   workflow_dispatch:
     inputs:
       mesa_version:
-        description: Mesa release to build
-        default: "24.3.4"
-      ios_min:
-        description: Minimum iOS version (16.0 matches the iPhone X identity)
-        default: "16.0"
+        description: Mesa release (HackiOS pins 25.0.7; their patches are made for it)
+        default: "25.0.7"
 
 jobs:
   mesa:
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
-
       - name: Deps
         run: |
-          # libdrm: freedreno's meson wants its headers at build time; at run time
-          # HackiOS's stand-in (hakios.drm.c) takes over
-          brew install meson ninja bison flex pkg-config libdrm zlib expat || true
-          meson --version
-          ninja --version
-          pkg-config --modversion libdrm || echo 'no libdrm pc' 
+          brew install meson ninja bison flex llvm python3 || true
+          export PATH="$(brew --prefix llvm)/bin:$PATH"
+          meson --version; ninja --version; llvm-strip --version | head -1
 
-      - name: Python modules (Mesa generates code with mako)
+      - name: HackiOS's mesa tree (patches, libdrm stand-in, AIR frontend)
         run: |
-          python3 --version
-          python3 -m pip install --upgrade pip || true
-          python3 -m pip install --break-system-packages mako packaging pyyaml || \
-            python3 -m pip install --user mako packaging pyyaml
-          python3 -c "import mako, packaging; print('mako', mako.__version__)"
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/oosexgang/hackios-xnu-kernel.git hakios
+          cd hakios
+          git sparse-checkout set tools/mesa
+          ls -l tools/mesa | head -30
+          echo "--- patches:"; ls tools/mesa/*.patch | wc -l
+          echo "--- drm stand-in:"; ls -l tools/mesa/hakios-drm
+          echo "--- AIR:"; ls tools/mesa/air | head
 
-      - name: HackiOS's patches and libdrm stand-in
-        run: |
-          mkdir -p mesa-patches/hakios-drm
-          B=https://raw.githubusercontent.com/oosexgang/hackios-xnu-kernel/main/tools/mesa
-          for f in freedreno-darwin.patch osmesa-es-profile.patch; do
-            curl -sL --fail -o "mesa-patches/$f" "$B/$f" && echo "got $f"
-          done
-          for f in hakios.drm.c xf86drm.h; do
-            curl -sL --fail -o "mesa-patches/hakios-drm/$f" "$B/hakios-drm/$f" && echo "got $f"
-          done
-          ls -l mesa-patches mesa-patches/hakios-drm
-
-      - name: Fetch and patch Mesa
+      - name: Sources, patches, and the two directories their patches reach for
         run: |
           V=${{ inputs.mesa_version }}
           curl -sL --fail -o "mesa-$V.tar.xz" "https://archive.mesa3d.org/mesa-$V.tar.xz"
           tar xf "mesa-$V.tar.xz"
           cd "mesa-$V"
-          # freedreno-darwin.patch adds `include_directories('src/hakios-drm')`, so the
-          # stand-in has to sit inside the Mesa tree at exactly that path
-          mkdir -p src/hakios-drm
-          cp -R ../mesa-patches/hakios-drm/. src/hakios-drm/
-          ls -l src/hakios-drm
-          for p in ../mesa-patches/*.patch; do
-            echo "--- $p"
-            patch -p1 --no-backup-if-mismatch --forward < "$p" || echo "(did not apply cleanly: $p)"
+          for p in ../hakios/tools/mesa/*.patch; do
+            echo "--- $(basename $p)"
+            patch -p1 --no-backup-if-mismatch < "$p"
           done
-          echo "--- did the drm stand-in get wired in?"
-          grep -rn "hakios" src/freedreno/drm-shim/* src/gallium/drivers/freedreno/* 2>/dev/null | head -10 || true
+          rm -rf src/hakios-drm src/compiler/air
+          cp -r ../hakios/tools/mesa/hakios-drm src/hakios-drm
+          cp -r ../hakios/tools/mesa/air src/compiler/air
+          echo "--- wired in:"; ls src/hakios-drm; ls src/compiler/air | head -3
 
-      - name: Cross file
+      - name: Python venv with mako
         run: |
+          python3 -m venv venv
+          ./venv/bin/pip -q install mako pyyaml packaging
+          ./venv/bin/python -c "import mako; print('mako', mako.__version__)"
+
+      - name: Configure and build
+        run: |
+          V=${{ inputs.mesa_version }}
+          export PATH="$PWD/venv/bin:$(brew --prefix llvm)/bin:$PATH"
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK=$SDK"
-          cat > cross.ini <<EOF
+          cat > cross.ini <<INI
           [binaries]
-          c = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
-          cpp = ['xcrun', '--sdk', 'iphoneos', 'clang++', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
-          objc = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
-          objcpp = ['xcrun', '--sdk', 'iphoneos', 'clang++', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
-          ar = ['xcrun', 'ar']
-          strip = ['xcrun', 'strip']
-          pkg-config = '/usr/bin/false'
+          c = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=16.0']
+          cpp = ['xcrun', '--sdk', 'iphoneos', 'clang++', '-arch', 'arm64', '-miphoneos-version-min=16.0', '-fuse-cxa-atexit']
+          objc = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=16.0']
+          ar = 'llvm-ar'
+          ranlib = 'llvm-ranlib'
+          strip = 'llvm-strip'
+          pkg-config = 'false'
           [host_machine]
           system = 'darwin'
           subsystem = 'ios'
@@ -94,37 +81,48 @@ jobs:
           endian = 'little'
           [properties]
           needs_exe_wrapper = true
-          EOF
-          cat cross.ini
+          INI
+          cd "mesa-$V"
+          meson setup build --cross-file ../cross.ini --wrap-mode=nofallback \
+            --prefix=/redwood --libdir=lib --buildtype=release -Db_ndebug=true \
+            -Dplatforms= -Dgallium-drivers=softpipe,freedreno -Dfreedreno-kmds=msm \
+            -Dvulkan-drivers= -Dglx=disabled -Degl=disabled -Dgbm=disabled \
+            -Dosmesa=true -Dllvm=disabled -Dshared-glapi=enabled -Dgles1=disabled \
+            -Dgles2=enabled -Dopengl=true \
+            -Dzstd=disabled -Dxmlconfig=disabled -Dexpat=disabled -Dshader-cache=disabled \
+            -Dvalgrind=disabled -Dlibunwind=disabled -Dglvnd=disabled -Dvideo-codecs= \
+            -Dtools= -Dgallium-vdpau=disabled -Dgallium-va=disabled -Dgallium-xa=disabled \
+            -Dlmsensors=disabled -Dbuild-tests=false > ../meson-setup.log 2>&1 \
+            || { echo "=== meson setup failed ==="; tail -40 ../meson-setup.log; exit 1; }
+          echo "meson setup OK, building..."
+          ninja -C build > ../ninja.log 2>&1 || { echo "=== ninja failed ==="; grep -n "error:" ../ninja.log | head -30; tail -30 ../ninja.log; exit 1; }
+          echo "ninja OK"
 
-      - name: Configure and build
+      - name: Strip and name it as iOS expects
         run: |
           V=${{ inputs.mesa_version }}
-          cd "mesa-$V"
-          meson setup build --cross-file ../cross.ini \
-            -Dbuildtype=release \
-            -Dgallium-drivers=softpipe,freedreno \
-            -Dfreedreno-kmds=msm \
-            -Dosmesa=true \
-            -Dllvm=disabled \
-            -Dgles2=enabled \
-            -Dplatforms= \
-            -Dglx=disabled \
-            -Dbuild-tests=false \
-            -Dtools= 2>&1 | tail -40
-          ninja -C build 2>&1 | tail -40
+          export PATH="$(brew --prefix llvm)/bin:$PATH"
+          mkdir -p out
+          llvm-strip -x -o out/libOSMesa.8.dylib "mesa-$V/build/src/gallium/targets/osmesa/libOSMesa.8.dylib"
+          install_name_tool -id /redwood/lib/libOSMesa.8.dylib out/libOSMesa.8.dylib
+          file out/libOSMesa.8.dylib
+          ls -l out/libOSMesa.8.dylib
+          nm -gU out/libOSMesa.8.dylib | awk '$3 ~ /^_gl/ { print substr($3, 2) }' > out/exported-gl.txt
+          echo "exported gl* functions: $(wc -l < out/exported-gl.txt)"
 
-      - name: Collect
+      - name: What went wrong (if anything)
         if: always()
         run: |
-          mkdir -p out
-          find . -name "libOSMesa*.dylib" -exec cp {} out/ \; 2>/dev/null || true
-          find . -name "*.dylib" -path "*osmesa*" -exec cp {} out/ \; 2>/dev/null || true
-          ls -l out
+          echo "=== meson setup tail ==="; tail -20 meson-setup.log 2>/dev/null || echo none
+          echo "=== ninja errors ==="; grep -n "error:" ninja.log 2>/dev/null | head -20 || echo none
+          echo "=== ninja tail ==="; tail -15 ninja.log 2>/dev/null || echo none
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: mesa-ios
-          path: out/
+          path: |
+            out/
+            meson-setup.log
+            ninja.log
           if-no-files-found: warn
