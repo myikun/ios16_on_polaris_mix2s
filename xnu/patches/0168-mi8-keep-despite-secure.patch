@@ -1,0 +1,34 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -2533,6 +2533,7 @@
+ static uint32_t gmu_old_ao, gmu_old_h2h;   /* the GMU interrupt masks found at the start */
+ static bool gpu_nonsecure;      /* zap authenticated and the CP has switched the 3D core out of secure mode */
+ static bool gpu_kept;
++static bool keep_anyway;        /* mi8gpu_skipzap left the core secure, and the service is wanted anyway */
+ 
+ static void
+ gpu_cp_start(void)
+@@ -2870,7 +2871,12 @@
+ 		uint32_t skipzap = 0;
+ 
+ 		if (PE_parse_boot_argn("mi8gpu_skipzap", &skipzap, sizeof(skipzap)) && skipzap) {
+-			printf("mi8gpu: zap skipped (mi8gpu_skipzap=1); the secure mode is left as it is\n");
++			uint32_t secvid = rd(gpu3d + 4 * 0xf400);
++
++			printf("mi8gpu: zap skipped (mi8gpu_skipzap=1); SECVID_TRUST_CNTL %#x: %s\n", secvid,
++			    secvid == 0 ? "already out of secure mode" : "still secure; keeping anyway for the service");
++			gpu_nonsecure = secvid == 0;
++			keep_anyway = !gpu_nonsecure;
+ 			return;
+ 		}
+ 	}
+@@ -4452,7 +4458,7 @@
+ 				sleep_us(1000);
+ 				gmu_power_look("after GPU_SET and BOOT_SLUMBER cleared");
+ 				rail_ok = gpu_set;
+-				if (mi8_keep && gpu_set && cp_ok && gpu_nonsecure) {
++				if (mi8_keep && gpu_set && cp_ok && (gpu_nonsecure || keep_anyway)) {
+ 					/* nothing is stopped: the system draws with this GPU from here (gmu_unsafe stays set so that no
+ 					 * teardown frees what the core uses) */
+ 					uint32_t perf = 7;      /* the highest of the table; mi8gpu_perf=N another, 0 none (EXP-0116: 17 times the fill rate of the boot level) */
