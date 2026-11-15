@@ -1,0 +1,14 @@
+diff --git a/bsd/dev/polaris_gpu_fw.c b/bsd/dev/polaris_gpu_fw.c
+--- a/bsd/dev/polaris_gpu_fw.c
++++ b/bsd/dev/polaris_gpu_fw.c
+@@ -65,8 +65,5 @@
+ 	(void)c;
+ }
+ 
+-/* Only reached when the driver is asked to keep the GPU for the window server. */
+-void
+-RedwoodGPUStart(void)
+-{
+-}
++/* The service itself is iokit/Kernel/arm/RedwoodGPU.cpp (patch 0162): it publishes
++ * an IOService whose user client answers Mesa's msm requests. */
