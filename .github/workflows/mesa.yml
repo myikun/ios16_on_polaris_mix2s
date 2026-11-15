@@ -1,132 +1,60 @@
 name: mesa
 
-# Mesa's freedreno for iOS arm64, built the way HackiOS builds it (tools/mk-mesa.sh),
-# not the way I guessed at for three runs: same Mesa release they pin (25.0.7),
-# ALL of their tools/mesa/*.patch, their libdrm stand-in and AIR frontend copied
-# into the tree at the paths their patches expect, their meson options verbatim.
+# The whole GPU user space, built by someone else's proven pipeline instead of my
+# own guesses: this is limonetexd/ios-sweet-gpu's .github/workflows/userland.yml,
+# run against the same pinned donors, with the output uploaded here.
 #
-# Produces libOSMesa.8.dylib (install name /redwood/lib/libOSMesa.8.dylib) -- the
-# library that talks to the kernel's RedwoodGPU service through hakios.drm.c.
+# It produces, in one run:
+#   libOSMesa.8.dylib      Mesa 25.0.7 freedreno+softpipe, iOS arm64
+#   libtopaz-gl.dylib      eagl.c + gl_osmesa.c  (the EAGL-on-OSMesa shim)
+#   libtopaz-inject.dylib  the backboardd loader
+#   backboardd             the replacement window server binary
+#   gl_test                a triangle drawn with OSMesa and read back
+#
+# Their recipe also documents the trap that cost us a round: the iOS SDK has no
+# IOKit headers, so the build copies them from the macOS SDK.
 
 on:
   workflow_dispatch:
-    inputs:
-      mesa_version:
-        description: Mesa release (HackiOS pins 25.0.7; their patches are made for it)
-        default: "25.0.7"
 
 jobs:
-  mesa:
+  gpu:
     runs-on: macos-15
-    timeout-minutes: 150
+    timeout-minutes: 90
     steps:
-      - name: Deps
-        run: |
-          brew install meson ninja bison flex llvm python3 lxml || true
-          export PATH="$(brew --prefix llvm)/bin:$PATH"
-          meson --version; ninja --version; llvm-strip --version | head -1
+      - uses: actions/checkout@v4
 
-      - name: HackiOS's mesa tree (patches, libdrm stand-in, AIR frontend)
+      - name: Donor sources (their pinned revisions)
         run: |
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/oosexgang/hackios-xnu-kernel.git hakios
-          cd hakios
-          git sparse-checkout set tools/mesa
-          ls -l tools/mesa | head -30
-          echo "--- patches:"; ls tools/mesa/*.patch | wc -l
-          echo "--- drm stand-in:"; ls -l tools/mesa/hakios-drm
-          echo "--- AIR:"; ls tools/mesa/air | head
+          git clone -q https://github.com/MakrSas/ios-topaz donor/topaz
+          git -C donor/topaz checkout -q e4772911e116ab4ab6c4ac1f38e6106fefe8b483
+          git clone -q https://github.com/oosexgang/hackios-xnu-kernel donor/hackios
+          git -C donor/hackios checkout -q a3384e031eb1e605cf37adaefc19991f04f6274b
+          git clone -q https://github.com/limonetexd/ios-sweet-gpu sweetgpu
+          echo "--- their build script:"; ls -l sweetgpu/userland/build-gpu.sh
 
-      - name: Sources, patches, and the two directories their patches reach for
+      - name: Tools
         run: |
-          V=${{ inputs.mesa_version }}
-          curl -sL --fail -o "mesa-$V.tar.xz" "https://archive.mesa3d.org/mesa-$V.tar.xz"
-          tar xf "mesa-$V.tar.xz"
-          cd "mesa-$V"
-          for p in ../hakios/tools/mesa/*.patch; do
-            echo "--- $(basename $p)"
-            patch -p1 --no-backup-if-mismatch < "$p"
-          done
-          rm -rf src/hakios-drm src/compiler/air
-          cp -r ../hakios/tools/mesa/hakios-drm src/hakios-drm
-          cp -r ../hakios/tools/mesa/air src/compiler/air
-          echo "--- wired in:"; ls src/hakios-drm; ls src/compiler/air | head -3
+          brew install meson ninja bison pkg-config || true
+          export PATH="$(brew --prefix bison)/bin:$PATH"
+          bison --version | head -1
 
-      - name: Python venv with mako
+      - name: Build the user space (their script, unchanged)
         run: |
-          python3 -m venv venv
-          ./venv/bin/pip -q install mako pyyaml packaging
-          ./venv/bin/python -c "import mako; print('mako', mako.__version__)"
+          export PATH="$(brew --prefix bison)/bin:$PATH"
+          bash sweetgpu/userland/build-gpu.sh donor out 2>&1 | tail -60
 
-      - name: Configure and build
-        run: |
-          V=${{ inputs.mesa_version }}
-          # bison and flex first: macOS ships bison 2.3, which cannot parse
-          # Mesa's ir3 grammar ("invalid directive: %code")
-          export PATH="$PWD/venv/bin:$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
-          echo "bison: $(bison --version | head -1)"
-          echo "flex:  $(flex --version | head -1)"
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "SDK=$SDK"
-          cat > cross.ini <<INI
-          [binaries]
-          c = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=16.0']
-          cpp = ['xcrun', '--sdk', 'iphoneos', 'clang++', '-arch', 'arm64', '-miphoneos-version-min=16.0', '-fuse-cxa-atexit']
-          objc = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=16.0']
-          ar = 'llvm-ar'
-          ranlib = 'llvm-ranlib'
-          strip = 'llvm-strip'
-          pkg-config = 'false'
-          [host_machine]
-          system = 'darwin'
-          subsystem = 'ios'
-          cpu_family = 'aarch64'
-          cpu = 'arm64'
-          endian = 'little'
-          [properties]
-          needs_exe_wrapper = true
-          INI
-          cd "mesa-$V"
-          meson setup build --cross-file ../cross.ini --wrap-mode=nofallback \
-            --prefix=/redwood --libdir=lib --buildtype=release -Db_ndebug=true \
-            -Dplatforms= -Dgallium-drivers=softpipe,freedreno -Dfreedreno-kmds=msm \
-            -Dvulkan-drivers= -Dglx=disabled -Degl=disabled -Dgbm=disabled \
-            -Dosmesa=true -Dllvm=disabled -Dshared-glapi=enabled -Dgles1=disabled \
-            -Dgles2=enabled -Dopengl=true \
-            -Dzstd=disabled -Dxmlconfig=disabled -Dexpat=disabled -Dshader-cache=disabled \
-            -Dvalgrind=disabled -Dlibunwind=disabled -Dglvnd=disabled -Dvideo-codecs= \
-            -Dtools= -Dgallium-vdpau=disabled -Dgallium-va=disabled -Dgallium-xa=disabled \
-            -Dlmsensors=disabled -Dbuild-tests=false > ../meson-setup.log 2>&1 \
-            || { echo "=== meson setup failed ==="; tail -40 ../meson-setup.log; exit 1; }
-          echo "meson setup OK, building..."
-          ninja -C build > ../ninja.log 2>&1 || { echo "=== ninja failed ==="; grep -n "error:" ../ninja.log | head -30; tail -30 ../ninja.log; exit 1; }
-          echo "ninja OK"
-
-      - name: Strip and name it as iOS expects
-        run: |
-          V=${{ inputs.mesa_version }}
-          export PATH="$(brew --prefix llvm)/bin:$PATH"
-          mkdir -p out
-          llvm-strip -x -o out/libOSMesa.8.dylib "mesa-$V/build/src/gallium/targets/osmesa/libOSMesa.8.dylib"
-          install_name_tool -id /redwood/lib/libOSMesa.8.dylib out/libOSMesa.8.dylib
-          file out/libOSMesa.8.dylib
-          ls -l out/libOSMesa.8.dylib
-          nm -gU out/libOSMesa.8.dylib | awk '$3 ~ /^_gl/ { print substr($3, 2) }' > out/exported-gl.txt
-          echo "exported gl* functions: $(wc -l < out/exported-gl.txt)"
-
-      - name: What went wrong (if anything)
+      - name: What we got
         if: always()
         run: |
-          echo "=== meson setup tail ==="; tail -20 meson-setup.log 2>/dev/null || echo none
-          echo "=== ninja errors ==="; grep -n "error:" ninja.log 2>/dev/null | head -20 || echo none
-          echo "=== ninja tail ==="; tail -15 ninja.log 2>/dev/null || echo none
+          ls -l out 2>/dev/null || echo "(no out/)"
+          for f in out/*.dylib out/backboardd out/gl_test; do
+            [ -f "$f" ] && file "$f"
+          done
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mesa-ios
-          path: |
-            out/
-            meson-setup.log
-            ninja.log
+          name: gpu-userland
+          path: out/
           if-no-files-found: warn
