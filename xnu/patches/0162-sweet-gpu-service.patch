@@ -58,15 +58,21 @@ new file mode 100644
 +}
 +
 +#endif /* REDWOOD_SURFACE_SHIM_H */
-diff --git a/iokit/Kernel/arm/RedwoodGPU.cpp b/iokit/Kernel/arm/RedwoodGPU.cpp
-new file mode 100644
---- /dev/null
-+++ b/iokit/Kernel/arm/RedwoodGPU.cpp
-@@ -0,0 +1,1329 @@
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -79,4 +79,1343 @@
+  * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
+  * is what the iPhone userland (MobileGestalt) expects.
+  */
++
 +/*
-+ * RedwoodGPU: the GPU as Mesa sees it. Ported from HackiOS's
-+ * drivers/gpu/hakios.gpu.cpp for polaris' A630; the driver side is
-+ * bsd/dev/mi8_adreno.c (mi8_gpu_address / map / unmap / submit / done).
++ * ---------------------------------------------------------------------------
++ * RedwoodGPU: the GPU as Mesa sees it (bsd/dev/mi8_adreno.c is the driver side).
++ * Ported from HackiOS's drivers/gpu/hakios.gpu.cpp; it lives in this unit because
++ * the build's own iokit/conf/files.arm64 differs from ours before our patches run,
++ * so a new source file there would never be compiled.
++ * ---------------------------------------------------------------------------
 + */
 +/*
 + * RedwoodGPU: the phone's Adreno for programs to draw with.
@@ -114,7 +120,12 @@ new file mode 100644
 +#include <pexpert/pexpert.h>
 +#include "RedwoodSurfaceShim.h"
 +
-+extern "C" void hakios_tl(const char * format, ...) __printflike(1, 2);
++/* their tree traces GPU waits through this; nothing reads those lines here */
++extern "C" void
++hakios_tl(const char * format, ...)
++{
++	(void)format;
++}
 +
 +extern "C" {
 +/* drivers/gpu/hakios.adreno.c ("the GPU kept on"; declared in bsd/sys/hakios.input.h, which is not seen from here) */
@@ -1392,3 +1403,5 @@ new file mode 100644
 +	}
 +	return ret;
 +}
++
+ #endif /* SWEET */
