@@ -1,0 +1,42 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -1285,11 +1285,33 @@
+ 		}
+ 		printf("mi8gpu: gsA: allocating %s: %u bytes contiguous\n", g3d_regions[r].name,
+ 		    round_page(g3d_regions[r].size));
+-		if (kmem_alloc_contig(kernel_map, &g3d_regions[r].memory, round_page(g3d_regions[r].size), PAGE_MASK, 0, 0,
+-		    KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+-			printf("mi8gpu: no memory for %s\n", g3d_regions[r].name);
+-			g3d_free();
+-			return false;
++		/*
++		 * Contiguous memory of the full size may not be there this early: take what is
++		 * available rather than stopping the ladder. The region keeps the size it got, so
++		 * the pages mapped for it and its size never disagree.
++		 */
++		{
++			vm_size_t want = round_page(g3d_regions[r].size);
++			bool got = false;
++
++			while (want >= PAGE_SIZE * 16) {
++				if (kmem_alloc_contig(kernel_map, &g3d_regions[r].memory, want, PAGE_MASK, 0, 0,
++				    KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) == KERN_SUCCESS) {
++					got = true;
++					if (want != round_page(g3d_regions[r].size)) {
++						printf("mi8gpu: %s gets %lu of %lu bytes contiguous\n", g3d_regions[r].name,
++						    (unsigned long)want, (unsigned long)round_page(g3d_regions[r].size));
++					}
++					g3d_regions[r].size = (uint32_t)want;
++					break;
++				}
++				want /= 2;
++			}
++			if (!got) {
++				printf("mi8gpu: no memory for %s\n", g3d_regions[r].name);
++				g3d_free();
++				return false;
++			}
+ 		}
+ 		printf("mi8gpu: gsA: %s at %#lx (phys %#llx)\n", g3d_regions[r].name,
+ 		    g3d_regions[r].memory, kvtophys(g3d_regions[r].memory));
