@@ -62,7 +62,7 @@ diff --git a/iokit/Kernel/arm/RedwoodGPU.cpp b/iokit/Kernel/arm/RedwoodGPU.cpp
 new file mode 100644
 --- /dev/null
 +++ b/iokit/Kernel/arm/RedwoodGPU.cpp
-@@ -0,0 +1,1337 @@
+@@ -0,0 +1,1329 @@
 +/*
 + * RedwoodGPU: the GPU as Mesa sees it. Ported from HackiOS's
 + * drivers/gpu/hakios.gpu.cpp for polaris' A630; the driver side is
@@ -114,15 +114,7 @@ new file mode 100644
 +#include <pexpert/pexpert.h>
 +#include "RedwoodSurfaceShim.h"
 +
-+/*
-+ * Their tree traces GPU waits through this; nothing reads those lines here, so
-+ * it is a no-op and the call sites stay as they were.
-+ */
-+extern "C" void
-+hakios_tl(const char * format, ...)
-+{
-+	(void)format;
-+}
++extern "C" void hakios_tl(const char * format, ...) __printflike(1, 2);
 +
 +extern "C" {
 +/* drivers/gpu/hakios.adreno.c ("the GPU kept on"; declared in bsd/sys/hakios.input.h, which is not seen from here) */
@@ -1400,11 +1392,3 @@ new file mode 100644
 +	}
 +	return ret;
 +}
-diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
---- a/iokit/conf/files.arm64
-+++ b/iokit/conf/files.arm64
-@@ -1 +1,4 @@
- iokit/Kernel/arm/SweetPlatformExpert.cpp                         optional iokitcpp
-+
-+# HackiOS's msm-facing GPU service (GPU service for Mesa's freedreno)
-+iokit/Kernel/arm/RedwoodGPU.cpp                                  optional iokitcpp
