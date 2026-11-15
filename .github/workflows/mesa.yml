@@ -1,0 +1,115 @@
+name: mesa
+
+# Builds Mesa's freedreno for iOS arm64 on a macOS runner: the library that turns
+# the GPU service's buffers and submissions into OpenGL ES. HackiOS's recipe:
+# fetch a pinned Mesa, apply their Darwin patches (freedreno-darwin.patch supplies
+# the libdrm stand-in that calls our kernel service), cross-compile against Xcode's
+# iPhoneOS SDK, and upload libOSMesa.8.dylib.
+#
+# Nothing here touches the phone. The artifact is what a later step installs into
+# the iOS image next to the EAGL shim.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_version:
+        description: Mesa release to build
+        default: "24.3.4"
+      ios_min:
+        description: Minimum iOS version (16.0 matches the iPhone X identity)
+        default: "16.0"
+
+jobs:
+  mesa:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps
+        run: |
+          brew install meson ninja bison flex pkg-config || true
+          meson --version
+          ninja --version
+
+      - name: HackiOS's patches and libdrm stand-in
+        run: |
+          mkdir -p mesa-patches/hakios-drm
+          B=https://raw.githubusercontent.com/oosexgang/hackios-xnu-kernel/main/tools/mesa
+          for f in freedreno-darwin.patch osmesa-es-profile.patch; do
+            curl -sL --fail -o "mesa-patches/$f" "$B/$f" && echo "got $f"
+          done
+          for f in hakios.drm.c xf86drm.h; do
+            curl -sL --fail -o "mesa-patches/hakios-drm/$f" "$B/hakios-drm/$f" && echo "got $f"
+          done
+          ls -l mesa-patches mesa-patches/hakios-drm
+
+      - name: Fetch and patch Mesa
+        run: |
+          V=${{ inputs.mesa_version }}
+          curl -sL --fail -o "mesa-$V.tar.xz" "https://archive.mesa3d.org/mesa-$V.tar.xz"
+          tar xf "mesa-$V.tar.xz"
+          cd "mesa-$V"
+          # the patches expect the libdrm stand-in inside the tree, as HackiOS keeps it
+          mkdir -p ../tools/mesa/hakios-drm
+          cp -R ../mesa-patches/hakios-drm/. ../tools/mesa/hakios-drm/
+          for p in ../mesa-patches/*.patch; do
+            echo "--- $p"
+            patch -p1 --no-backup-if-mismatch --forward < "$p" || echo "(did not apply cleanly: $p)"
+          done
+          echo "--- did the drm stand-in get wired in?"
+          grep -rn "hakios" src/freedreno/drm-shim/* src/gallium/drivers/freedreno/* 2>/dev/null | head -10 || true
+
+      - name: Cross file
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK=$SDK"
+          cat > cross.ini <<EOF
+          [binaries]
+          c = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
+          cpp = ['xcrun', '--sdk', 'iphoneos', 'clang++', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
+          ar = 'xcrun'
+          strip = 'xcrun'
+          pkg-config = '/usr/bin/false'
+          [host_machine]
+          system = 'darwin'
+          subsystem = 'ios'
+          cpu_family = 'aarch64'
+          cpu = 'arm64'
+          endian = 'little'
+          [properties]
+          needs_exe_wrapper = true
+          EOF
+          cat cross.ini
+
+      - name: Configure and build
+        run: |
+          V=${{ inputs.mesa_version }}
+          cd "mesa-$V"
+          meson setup build --cross-file ../cross.ini \
+            -Dbuildtype=release \
+            -Dgallium-drivers=softpipe,freedreno \
+            -Dfreedreno-kmds=msm \
+            -Dosmesa=true \
+            -Dllvm=disabled \
+            -Dgles2=enabled \
+            -Dplatforms= \
+            -Dglx=disabled \
+            -Dbuild-tests=false \
+            -Dtools= 2>&1 | tail -40
+          ninja -C build 2>&1 | tail -40
+
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p out
+          find . -name "libOSMesa*.dylib" -exec cp {} out/ \; 2>/dev/null || true
+          find . -name "*.dylib" -path "*osmesa*" -exec cp {} out/ \; 2>/dev/null || true
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mesa-ios
+          path: out/
+          if-no-files-found: warn
