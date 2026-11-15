@@ -52,6 +52,18 @@ jobs:
           grep -n 'gpu_id = 630' src/freedreno/drm-shim/freedreno_noop.c || true
           grep -n 'FD_VA_START' src/freedreno/drm-shim/freedreno_noop.c || true
 
+      # If no shim appears, this prints why: which option gates the subdirectory
+      # and what the subdirectory itself builds.
+      - name: Show drm-shim meson
+        if: always()
+        run: |
+          echo "--- src/meson.build ---"
+          grep -n "drm.shim\|drm_shim" mesa/src/meson.build 2>/dev/null | head -20 || true
+          echo "--- src/freedreno/meson.build ---"
+          grep -n "drm.shim\|drm_shim\|with_tests\|with_tools" mesa/src/freedreno/meson.build 2>/dev/null | head -20 || true
+          echo "--- src/freedreno/drm-shim/meson.build ---"
+          cat mesa/src/freedreno/drm-shim/meson.build 2>/dev/null | head -40 || true
+
       - name: Configure and build
         run: |
           cd mesa
@@ -63,13 +75,28 @@ jobs:
             -Dgallium-drivers=freedreno \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=msm \
-            -Dtools=freedreno \
+            -Dtools=freedreno,drm-shim \
             -Dbuild-tests=true
           ninja -C build
           # the no-op DRM shim: find it rather than assume its path
           ninja -C build -t targets all | grep -iE 'shim|noop' | head -20 || true
-          ninja -C build src/freedreno/drm-shim/all 2>/dev/null || true
           find build -name '*shim*.so' -o -name '*noop*.so' | head -10
+
+      # Insurance: if Mesa still did not produce it, build the one file by hand.
+      - name: Build the shim by hand if Mesa did not
+        if: always()
+        run: |
+          B="$GITHUB_WORKSPACE/mesa/build"
+          if ! find "$B" -name '*shim*.so' | grep -q .; then
+            echo "no shim from Mesa; compiling freedreno_noop.c directly"
+            cc -shared -fPIC -O2 -w \
+              -I mesa/include -I mesa/src -I mesa/src/freedreno \
+              -I "$B/src" -I "$B" -I mesa/src/gallium/include \
+              -o "$B/libfreedreno_noop_drm_shim.so" \
+              mesa/src/freedreno/drm-shim/freedreno_noop.c \
+              -ldl -lpthread -lm || echo "manual shim build failed"
+          fi
+          find "$B" -name '*shim*.so' | head -5
 
       - name: Build the capture program
         run: |
