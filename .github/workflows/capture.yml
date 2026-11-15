@@ -63,7 +63,8 @@ jobs:
             -Dgallium-drivers=freedreno \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=msm \
-            -Dtools=freedreno
+            -Dtools=freedreno \
+            -Dbuild-tests=true
           ninja -C build
           # the no-op DRM shim: find it rather than assume its path
           ninja -C build -t targets all | grep -iE 'shim|noop' | head -20 || true
