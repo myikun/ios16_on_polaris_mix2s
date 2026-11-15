@@ -91,7 +91,40 @@ jobs:
         env:
           # fail fast: with -k a broken build keeps compiling for minutes
           MAKEFLAGS: ${{ inputs.keep_going == 'true' && '-k' || '' }}
-        run: bash build.sh
+        run: |
+          set -o pipefail
+          bash build.sh 2>&1 | tee build.log
+
+      # A build prints thousands of warnings; what matters is the error lines.
+      # They go to the end of this log and to a small artifact.
+      - name: Errors
+        if: always()
+        run: |
+          : > errors.txt
+          if [ -f dxb/build.log ]; then
+            {
+              echo "=== error: lines ==="
+              grep -n -m 60 "error:" dxb/build.log | tail -60 || true
+              echo
+              echo "=== staged patches ==="
+              grep -n -m 20 "Skipping patch\|Applying patch" dxb/build.log | tail -20 || true
+              echo
+              echo "=== our files ==="
+              grep -n -m 80 -E "RedwoodGPU|RedwoodSurfaceShim|polaris_gpu_fw|sweet_keys|SweetPlatformExpert" dxb/build.log | tail -80 || true
+              echo
+              echo "=== build stopped ==="
+              grep -n -m 5 -E "ninja: build stopped|Error [0-9]+|FAILED:" dxb/build.log | tail -5 || true
+            } | tee errors.txt
+          else
+            echo "no dxb/build.log" | tee errors.txt
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-errors
+          path: errors.txt
+          if-no-files-found: warn
 
       # The patched sources, so they can be read here instead of guessed at from
       # the patch series. Small files; they make every later change exact.
