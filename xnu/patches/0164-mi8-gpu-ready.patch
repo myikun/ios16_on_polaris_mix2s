@@ -1,0 +1,20 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -3206,6 +3206,16 @@
+ 	return gpu_kept;
+ }
+ 
++/*
++ * Is the GPU on and usable by a program? The service (RedwoodGPU.cpp) asks this
++ * before every request: kept on, the CP took its commands, and the 3D core is up.
++ */
++bool
++mi8_gpu_ready(void)
++{
++	return gpu_kept && cp_ok && g3d_ready;
++}
++
+ /* Linux's adreno_get_param for an a630 (the numbers are msm_drm.h's). */
+ bool
+ mi8_gpu_parameter(uint32_t which, uint64_t *value)
