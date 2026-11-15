@@ -35,6 +35,14 @@ jobs:
           ninja --version
           pkg-config --modversion libdrm || echo 'no libdrm pc' 
 
+      - name: Python modules (Mesa generates code with mako)
+        run: |
+          python3 --version
+          python3 -m pip install --upgrade pip || true
+          python3 -m pip install --break-system-packages mako packaging pyyaml || \
+            python3 -m pip install --user mako packaging pyyaml
+          python3 -c "import mako, packaging; print('mako', mako.__version__)"
+
       - name: HackiOS's patches and libdrm stand-in
         run: |
           mkdir -p mesa-patches/hakios-drm
