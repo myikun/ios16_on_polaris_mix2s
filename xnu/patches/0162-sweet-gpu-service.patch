@@ -2,7 +2,7 @@ diff --git a/iokit/Kernel/arm/RedwoodSurfaceShim.h b/iokit/Kernel/arm/RedwoodSur
 new file mode 100644
 --- /dev/null
 +++ b/iokit/Kernel/arm/RedwoodSurfaceShim.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,55 @@
 +/*
 + * The parts of HackiOS's MiniIOSurface that their GPU service names, for a tree
 + * that has SweetSurface instead.
@@ -27,13 +27,21 @@ new file mode 100644
 +	uint32_t planeCount;
 +};
 +
++/* the part the display driver reads: the seed says the pixels changed */
++struct MiniIOSurfaceShared {
++	uint32_t seed;
++};
++
 +struct MiniIOSurface {
 +	struct MiniIOSurfaceInfo info;
 +	IOMemoryDescriptor *     memory;        /* where its pixels are */
++	uint8_t *                kbase;         /* ... and in the kernel */
 +	struct MiniIOSurface *   client;        /* set when it wraps a program's own memory */
 +	uint32_t                 drawn;         /* the last submission that draws into it */
 +	uint32_t                 seed;
 +	uint32_t                 id;
++	struct MiniIOSurfaceShared own;
++	struct MiniIOSurfaceShared * shared(void) { return &own; }
 +};
 +
 +static inline struct MiniIOSurface *
