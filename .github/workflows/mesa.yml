@@ -28,9 +28,12 @@ jobs:
 
       - name: Deps
         run: |
-          brew install meson ninja bison flex pkg-config || true
+          # libdrm: freedreno's meson wants its headers at build time; at run time
+          # HackiOS's stand-in (hakios.drm.c) takes over
+          brew install meson ninja bison flex pkg-config libdrm zlib expat || true
           meson --version
           ninja --version
+          pkg-config --modversion libdrm || echo 'no libdrm pc' 
 
       - name: HackiOS's patches and libdrm stand-in
         run: |
@@ -68,8 +71,10 @@ jobs:
           [binaries]
           c = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
           cpp = ['xcrun', '--sdk', 'iphoneos', 'clang++', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
-          ar = 'xcrun'
-          strip = 'xcrun'
+          objc = ['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
+          objcpp = ['xcrun', '--sdk', 'iphoneos', 'clang++', '-arch', 'arm64', '-miphoneos-version-min=${{ inputs.ios_min }}']
+          ar = ['xcrun', 'ar']
+          strip = ['xcrun', 'strip']
           pkg-config = '/usr/bin/false'
           [host_machine]
           system = 'darwin'
