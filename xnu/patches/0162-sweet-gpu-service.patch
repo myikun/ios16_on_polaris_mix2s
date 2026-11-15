@@ -1,7 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,170 @@
+@@ -79,4 +79,174 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
@@ -142,8 +142,12 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	return kIOReturnSuccess;
 +}
 +
-+/* Called by bsd/dev/mi8_adreno.c once the GPU is kept for the window server. */
-+void
++/*
++ * Called from bsd/dev/mi8_adreno.c, which is C: the symbol has to be the C one
++ * (_RedwoodGPUStart), or the kernel links against a mangled name that nothing
++ * defines -- which is exactly how this failed the first time.
++ */
++extern "C" void
 +RedwoodGPUStart(void)
 +{
 +	IOService *platform = IOService::getPlatform();
