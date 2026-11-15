@@ -1,0 +1,17 @@
+diff --git a/bsd/dev/polaris_gpu_fw.c b/bsd/dev/polaris_gpu_fw.c
+--- a/bsd/dev/polaris_gpu_fw.c
++++ b/bsd/dev/polaris_gpu_fw.c
+@@ -70,3 +70,13 @@
+ RedwoodGPUStart(void)
+ {
+ }
++
++/*
++ * Weak: iokit/Kernel/arm/SweetPlatformExpert.cpp defines the real one (RedwoodGPU,
++ * the msm-facing service). If that is ever missing, the kernel still links and the
++ * GPU simply stays without a service.
++ */
++__attribute__((weak)) void
++RedwoodGPUStart(void)
++{
++}
