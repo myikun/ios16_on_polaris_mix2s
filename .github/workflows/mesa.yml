@@ -61,9 +61,11 @@ jobs:
           curl -sL --fail -o "mesa-$V.tar.xz" "https://archive.mesa3d.org/mesa-$V.tar.xz"
           tar xf "mesa-$V.tar.xz"
           cd "mesa-$V"
-          # the patches expect the libdrm stand-in inside the tree, as HackiOS keeps it
-          mkdir -p ../tools/mesa/hakios-drm
-          cp -R ../mesa-patches/hakios-drm/. ../tools/mesa/hakios-drm/
+          # freedreno-darwin.patch adds `include_directories('src/hakios-drm')`, so the
+          # stand-in has to sit inside the Mesa tree at exactly that path
+          mkdir -p src/hakios-drm
+          cp -R ../mesa-patches/hakios-drm/. src/hakios-drm/
+          ls -l src/hakios-drm
           for p in ../mesa-patches/*.patch; do
             echo "--- $p"
             patch -p1 --no-backup-if-mismatch --forward < "$p" || echo "(did not apply cleanly: $p)"
