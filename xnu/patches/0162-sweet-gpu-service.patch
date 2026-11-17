@@ -1,7 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,558 @@
+@@ -79,4 +79,679 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
@@ -11,20 +11,18 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 + *
 + * freedreno speaks Linux's DRM/msm ioctl ABI (drm-uapi/msm_drm.h) through a small
 + * libdrm stand-in that opens an IOService named RedwoodGPU and passes one structure
-+ * per call as the call's data, with the answer expected in the same buffer.
-+ *
-+ * The layouts below are msm_drm.h's, field for field and padding included: a size
-+ * difference turns into kIOReturnBadArgument and Mesa reports it as ENOSYS.
++ * per call as the call's data, with the answer expected in the same buffer. Buffers
++ * and command-stream arrays are user addresses inside that structure, so they are
++ * copied in with copyin().
 + */
 +#include <IOKit/IOUserClient.h>
 +#include <IOKit/IOBufferMemoryDescriptor.h>
 +
-+/* the call numbers: DRM_COMMAND_BASE + the msm ioctl's own index */
 +enum {
-+	kMsmGemClose          = 0x09,   /* DRM_IOCTL_GEM_CLOSE */
-+	kMsmGetParam          = 0x40,   /* DRM_IOCTL_MSM_GET_PARAM */
-+	kMsmGemNew            = 0x42,   /* DRM_IOCTL_MSM_GEM_NEW */
-+	kMsmGemInfo           = 0x43,   /* DRM_IOCTL_MSM_GEM_INFO */
++	kMsmGemClose          = 0x09,
++	kMsmGetParam          = 0x40,
++	kMsmGemNew            = 0x42,
++	kMsmGemInfo           = 0x43,
 +	kMsmGemCpuPrep        = 0x44,
 +	kMsmGemCpuFini        = 0x45,
 +	kMsmGemSubmit         = 0x46,
@@ -34,7 +32,7 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	kMsmSubmitqueueQuery  = 0x4a,
 +};
 +
-+/* msm_drm.h, verbatim */
++/* msm_drm.h, field for field */
 +struct drm_msm_param {
 +	uint32_t pipe;
 +	uint32_t param;
@@ -64,6 +62,47 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	uint32_t handle;
 +};
 +
++struct drm_msm_gem_submit_bo {
++	uint32_t flags;
++	uint32_t handle;
++	uint64_t presumed;
++};
++
++struct drm_msm_gem_submit_cmd {
++	uint32_t type;
++	uint32_t submit_idx;
++	uint32_t submit_offset;
++	uint32_t size;
++	uint32_t pad;
++	uint32_t nr_relocs;
++	uint64_t relocs;
++};
++
++struct drm_msm_gem_submit {
++	uint32_t flags;
++	uint32_t fence;
++	uint32_t nr_bos;
++	uint32_t nr_cmds;
++	uint64_t bos;
++	uint64_t cmds;
++	int32_t fence_fd;
++	uint32_t queueid;
++	uint64_t in_syncobjs;
++	uint64_t out_syncobjs;
++	uint32_t nr_in_syncobjs;
++	uint32_t nr_out_syncobjs;
++	uint32_t syncobj_stride;
++	uint32_t pad;
++};
++
++struct drm_msm_wait_fence {
++	uint32_t fence;
++	uint32_t flags;
++	uint64_t timeout;
++	uint32_t queueid;
++	uint32_t pad;
++};
++
 +struct drm_msm_submitqueue {
 +	uint32_t flags;
 +	uint32_t prio;
@@ -75,7 +114,6 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	uint32_t pad;
 +};
 +
-+/* msm_drm.h parameter numbers */
 +#define MSM_PARAM_GPU_ID        0x01
 +#define MSM_PARAM_GMEM_SIZE     0x02
 +#define MSM_PARAM_CHIP_ID       0x03
@@ -92,10 +130,9 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +#define MSM_BO_GPU_READONLY     0x00000002
 +#define MSM_PREP_NOSYNC         0x04
 +
-+/*
-+ * The driver is C (bsd/dev/mi8_adreno.c); without extern "C" these would be looked
-+ * up under C++ names and the link would fail, exactly as RedwoodGPUStart once did.
-+ */
++#define kRedwoodBuffers         64
++#define kRedwoodMaxCmds         32
++
 +extern "C" {
 +uint64_t mi8_gpu_address(uint64_t size);
 +void mi8_gpu_address_free(uint64_t address, uint64_t size);
@@ -103,7 +140,12 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +void mi8_gpu_unmap(uint64_t address, uint64_t size);
 +void mi8_gpu_mapped(void);
 +void mi8_gpu_to_memory(void *start, uint64_t size);
++bool mi8_gpu_done(uint32_t fence);
++uint32_t mi8_gpu_submit(const uint64_t *addresses, const uint32_t *words, uint32_t count);
 +bool mi8_gpu_ready(void);
++
++/* osfmk/arm64/copyio.c: int copyin(const user_addr_t, void *, vm_size_t) */
++int copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes);
 +}
 +
 +struct RedwoodBuffer {
@@ -113,15 +155,14 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	bool used;
 +};
 +
-+#define kRedwoodBuffers 64
-+
 +class RedwoodGPU;
 +
 +class RedwoodGPUUserClient : public IOUserClient {
 +	OSDeclareDefaultStructors(RedwoodGPUUserClient);
 +
 +	RedwoodBuffer buffers[kRedwoodBuffers];
-+	unsigned calls;                 /* how many calls have come in, to bound the log */
++	unsigned calls;
++	unsigned submits;
 +
 +public:
 +	bool initWithTask(task_t owningTask, void *securityID, UInt32 type,
@@ -137,6 +178,8 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	RedwoodBuffer *buffer_add(uint64_t size, uint32_t flags, uint32_t *handle);
 +	void buffer_drop(RedwoodBuffer *b);
 +	void drop_all(void);
++	IOReturn do_submit(struct drm_msm_gem_submit *request);
++	IOReturn do_wait_fence(struct drm_msm_wait_fence *request);
 +};
 +
 +class RedwoodGPU : public IOService {
@@ -169,7 +212,7 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +		return false;
 +	}
 +	registerService();
-+	IOLog("RedwoodGPU: service published (msm ABI: params, buffers, submitqueue)\n");
++	IOLog("RedwoodGPU: service published (msm ABI: params, buffers, submit, fences)\n");
 +	return true;
 +}
 +
@@ -205,6 +248,7 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +		buffers[i].used = false;
 +	}
 +	calls = 0;
++	submits = 0;
 +	return true;
 +}
 +
@@ -283,7 +327,6 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +		return NULL;
 +	}
 +
-+	/* the core's page tables take 4 KB pages and mi8_gpu_map writes one entry */
 +	uint64_t mapped = 0;
 +	bool read_only = (flags & MSM_BO_GPU_READONLY) != 0;
 +	for (; mapped < bytes; mapped += 0x1000) {
@@ -338,6 +381,92 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +}
 +
 +IOReturn
++RedwoodGPUUserClient::do_submit(struct drm_msm_gem_submit *request)
++{
++	struct drm_msm_gem_submit_bo bos[kRedwoodMaxCmds];
++	struct drm_msm_gem_submit_cmd cmds[kRedwoodMaxCmds];
++	uint64_t addresses[kRedwoodMaxCmds];
++	uint32_t words[kRedwoodMaxCmds];
++	unsigned n;
++
++	if (request->nr_cmds == 0 || request->nr_cmds > kRedwoodMaxCmds ||
++	    request->nr_bos == 0 || request->nr_bos > kRedwoodMaxCmds || false) {
++		IOLog("RedwoodGPU: submit with %u bos / %u cmds refused\n",
++		    request->nr_bos, request->nr_cmds);
++		return kIOReturnBadArgument;
++	}
++	if (copyin((user_addr_t)request->bos, bos,
++	    request->nr_bos * sizeof(struct drm_msm_gem_submit_bo)) != 0 ||
++	    copyin((user_addr_t)request->cmds, cmds,
++	    request->nr_cmds * sizeof(struct drm_msm_gem_submit_cmd)) != 0) {
++		IOLog("RedwoodGPU: submit: cannot read the descriptor arrays\n");
++		return kIOReturnBadArgument;
++	}
++
++	for (n = 0; n < request->nr_cmds; n++) {
++		struct drm_msm_gem_submit_cmd *cmd = &cmds[n];
++		RedwoodBuffer *b;
++
++		if (cmd->nr_relocs != 0) {
++			/* freedreno uses softpin here and should send none */
++			IOLog("RedwoodGPU: submit: command %u has %u relocations (not handled)\n",
++			    n, cmd->nr_relocs);
++			return kIOReturnUnsupported;
++		}
++		if (cmd->submit_idx >= request->nr_bos) {
++			IOLog("RedwoodGPU: submit: command %u names buffer %u of %u\n",
++			    n, cmd->submit_idx, request->nr_bos);
++			return kIOReturnBadArgument;
++		}
++		b = buffer_by_handle(bos[cmd->submit_idx].handle);
++		if (b == NULL) {
++			IOLog("RedwoodGPU: submit: command %u: buffer %u is unknown\n",
++			    n, bos[cmd->submit_idx].handle);
++			return kIOReturnNotFound;
++		}
++		if ((uint64_t)cmd->submit_offset + cmd->size > b->size) {
++			IOLog("RedwoodGPU: submit: command %u runs past its buffer (%u+%u > %llu)\n",
++			    n, cmd->submit_offset, cmd->size, b->size);
++			return kIOReturnBadArgument;
++		}
++		addresses[n] = b->gpu + cmd->submit_offset;
++		words[n] = cmd->size / 4;
++	}
++
++	uint32_t fence = mi8_gpu_submit(addresses, words, request->nr_cmds);
++	if (fence == 0) {
++		IOLog("RedwoodGPU: submit: the ring had no room\n");
++		return kIOReturnNoResources;
++	}
++	if (submits < 16) {
++		IOLog("RedwoodGPU: submit %u: %u command(s), fence %u\n", submits, request->nr_cmds, fence);
++	}
++	submits++;
++	request->fence = fence;
++	return kIOReturnSuccess;
++}
++
++IOReturn
++RedwoodGPUUserClient::do_wait_fence(struct drm_msm_wait_fence *request)
++{
++	uint64_t waited = 0;
++	uint64_t limit_ms = request->timeout == 0 ? 1000 : request->timeout / 1000000ull;
++
++	if (limit_ms == 0 || limit_ms > 5000) {
++		limit_ms = 5000;
++	}
++	while (!mi8_gpu_done(request->fence)) {
++		if (waited >= limit_ms) {
++			IOLog("RedwoodGPU: fence %u not reached after %llu ms\n", request->fence, waited);
++			return kIOReturnTimeout;
++		}
++		IOSleep(1);
++		waited++;
++	}
++	return kIOReturnSuccess;
++}
++
++IOReturn
 +RedwoodGPUUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
 +    IOExternalMethodDispatch *dispatch, OSObject *target, void *ref)
 +{
@@ -362,8 +491,7 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +		return kIOReturnBadArgument;
 +	}
 +
-+	/* the first calls are worth seeing; after that the log would drown the boot */
-+	if (calls < 40) {
++	if (calls < 48) {
 +		IOLog("RedwoodGPU: call %u selector %#x in %lu out %lu\n",
 +		    calls, selector, (unsigned long)inSize, (unsigned long)outSize);
 +	}
@@ -378,40 +506,16 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +		}
 +		redwood_copy(&request, in, sizeof(request));
 +		switch (request.param) {
-+		case MSM_PARAM_GPU_ID:
-+			request.value = 630;
-+			break;
-+		case MSM_PARAM_GMEM_SIZE:
-+			request.value = 0x80000;
-+			break;
-+		case MSM_PARAM_CHIP_ID:
-+			request.value = 0x06030001ull;
-+			break;
-+		case MSM_PARAM_MAX_FREQ:
-+			request.value = 710000000ull;
-+			break;
-+		case MSM_PARAM_NR_RINGS:
-+			request.value = 1;
-+			break;
-+		case MSM_PARAM_PP_PGTABLE:
-+			request.value = 0;      /* no per-process page tables */
-+			break;
-+		case MSM_PARAM_FAULTS:
-+			request.value = 0;
-+			break;
-+		case MSM_PARAM_SUSPENDS:
-+			request.value = 0;
-+			break;
-+		case MSM_PARAM_PRIORITIES:
-+			request.value = 1;
-+			break;
-+		default:
-+			/*
-+			 * Never "unsupported": a -1 here stops fd_pipe_new() and with it
-+			 * everything. An unknown parameter is answered with zero.
-+			 */
-+			request.value = 0;
-+			break;
++		case MSM_PARAM_GPU_ID:      request.value = 630; break;
++		case MSM_PARAM_GMEM_SIZE:   request.value = 0x80000; break;
++		case MSM_PARAM_CHIP_ID:     request.value = 0x06030001ull; break;
++		case MSM_PARAM_MAX_FREQ:    request.value = 710000000ull; break;
++		case MSM_PARAM_NR_RINGS:    request.value = 1; break;
++		case MSM_PARAM_PP_PGTABLE:  request.value = 0; break;
++		case MSM_PARAM_FAULTS:      request.value = 0; break;
++		case MSM_PARAM_SUSPENDS:    request.value = 0; break;
++		case MSM_PARAM_PRIORITIES:  request.value = 1; break;
++		default:                    request.value = 0; break;
 +		}
 +		request.len = sizeof(uint64_t);
 +		redwood_copy(out, &request, sizeof(request));
@@ -501,7 +605,6 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +			return kIOReturnBadArgument;
 +		}
 +		redwood_copy(&request, in, sizeof(request));
-+		/* one ring, one queue: freedreno only needs it to exist */
 +		request.id = 1;
 +		redwood_copy(out, &request, sizeof(request));
 +		IOLog("RedwoodGPU: submitqueue 1 (priority %u)\n", request.prio);
@@ -516,13 +619,31 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +		return kIOReturnSuccess;
 +	}
 +
-+	case kMsmGemSubmit:
-+		IOLog("RedwoodGPU: GEM_SUBMIT is not implemented yet\n");
-+		return kIOReturnUnsupported;
++	case kMsmGemSubmit: {
++		struct drm_msm_gem_submit request;
++		IOReturn result;
 +
-+	case kMsmWaitFence:
-+		IOLog("RedwoodGPU: WAIT_FENCE is not implemented yet\n");
-+		return kIOReturnUnsupported;
++		if (inSize < sizeof(request) || outSize < sizeof(request)) {
++			return kIOReturnBadArgument;
++		}
++		redwood_copy(&request, in, sizeof(request));
++		result = do_submit(&request);
++		redwood_copy(out, &request, sizeof(request));
++		return result;
++	}
++
++	case kMsmWaitFence: {
++		struct drm_msm_wait_fence request;
++		IOReturn result;
++
++		if (inSize < sizeof(request) || outSize < sizeof(request)) {
++			return kIOReturnBadArgument;
++		}
++		redwood_copy(&request, in, sizeof(request));
++		result = do_wait_fence(&request);
++		redwood_copy(out, &request, sizeof(request));
++		return result;
++	}
 +
 +	default:
 +		IOLog("RedwoodGPU: selector %#x is not one we answer\n", selector);
