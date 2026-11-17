@@ -33,7 +33,7 @@ jobs:
   build:
     # macos-14 was retired on 2026-11-02; macos-15 ships Xcode 16, whose iig
     # emits IORPC.kernelContent -- patch 0104 adds that field to xnu-8796.
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
