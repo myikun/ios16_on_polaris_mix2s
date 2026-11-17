@@ -1,50 +1,141 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,174 @@
+@@ -79,4 +79,523 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
 +
 +/*
-+ * RedwoodGPU: the GPU as Mesa's freedreno asks for it, the first step.
++ * RedwoodGPU: the GPU as Mesa's freedreno asks for it.
 + *
-+ * freedreno speaks Linux's msm ioctl numbers through a small libdrm stand-in.
-+ * What it asks first is GET_PARAM: whose GPU this is. This answers that and
-+ * nothing else yet; every other request says "unsupported", which the stand-in
-+ * turns into an error the program can report. The buffer and submission requests
-+ * come next, once this much is seen to work on the phone.
++ * freedreno speaks Linux's msm ioctl numbers through a small libdrm stand-in; the
++ * stand-in opens an IOService named RedwoodGPU (this class) and passes one struct
++ * per call, as input, expecting the answer in the same struct back.
++ *
++ * A program's buffer is an IOBufferMemoryDescriptor: contiguous, so the physical
++ * address is meaningful, and mappable into the program with clientMemoryForType.
++ * The same memory is mapped into the GPU's address space by the driver, which owns
++ * the page tables (mi8_gpu_address / mi8_gpu_map / mi8_gpu_unmap).
 + */
 +#include <IOKit/IOUserClient.h>
++#include <IOKit/IOBufferMemoryDescriptor.h>
 +
++/* the ioctl numbers, DRM_COMMAND_BASE + msm's own index (drmCommandWrite's are the same) */
 +enum {
-+	kMsmGetParam            = 0x40,
++	kMsmGemClose    = 0x09,         /* drmIoctl: DRM_IOCTL_GEM_CLOSE */
++	kMsmGetParam    = 0x40,
++	kMsmGemNew      = 0x42,
++	kMsmGemInfo     = 0x43,
++	kMsmGemCpuPrep  = 0x44,
++	kMsmGemCpuFini  = 0x45,
++};
++
++/* the layouts their libdrm sends; do not "fix" these to Linux's */
++struct msm_timespec {
++	int64_t tv_sec, tv_nsec;
 +};
 +
 +struct msm_param {
-+	uint32_t pipe, param;           /* in: which value is wanted */
-+	uint64_t value;                 /* out */
++	uint32_t pipe, param;
++	uint64_t value;
 +	uint32_t len, pad;
 +};
 +
-+/* Linux's msm_drm.h parameter numbers */
++struct msm_gem_new {
++	uint64_t size;
++	uint32_t flags, handle;
++};
++
++struct msm_gem_info {
++	uint32_t handle, info;
++	uint64_t value;
++	uint32_t len, pad;
++};
++
++struct msm_gem_cpu_prep {
++	uint32_t handle, op;
++	struct msm_timespec timeout;
++};
++
++struct msm_gem_cpu_fini {
++	uint32_t handle, pad;
++};
++
++struct drm_gem_close {
++	uint32_t handle, pad;
++};
++
++/* msm_drm.h */
 +#define MSM_PARAM_GPU_ID        0x01
 +#define MSM_PARAM_GMEM_SIZE     0x02
 +#define MSM_PARAM_CHIP_ID       0x03
 +#define MSM_PARAM_MAX_FREQ      0x0a
 +#define MSM_PARAM_NR_RINGS      0x0b
 +
++#define MSM_INFO_GET_OFFSET     0
++#define MSM_INFO_GET_IOVA       1
++
++#define MSM_BO_GPU_READONLY     0x00000002
++#define MSM_PREP_NOSYNC         0x04
++
++/*
++ * The driver is C (bsd/dev/mi8_adreno.c). Without extern "C" these would be looked
++ * up under C++ names that nothing defines -- the same mistake that stopped
++ * RedwoodGPUStart from linking.
++ */
++/* no header games: a byte copy of our own cannot be undeclared */
++static void
++redwood_copy(void *dst, const void *src, size_t n)
++{
++	unsigned char *d = (unsigned char *)dst;
++	const unsigned char *s = (const unsigned char *)src;
++
++	while (n-- != 0) {
++		*d++ = *s++;
++	}
++}
++
++extern "C" {
++uint64_t mi8_gpu_address(uint64_t size);
++void mi8_gpu_address_free(uint64_t address, uint64_t size);
++bool mi8_gpu_map(uint64_t address, uint64_t phys, bool read_only);
++void mi8_gpu_unmap(uint64_t address, uint64_t size);
++void mi8_gpu_mapped(void);
++void mi8_gpu_to_memory(void *start, uint64_t size);
++bool mi8_gpu_ready(void);
++}
++
++struct RedwoodBuffer {
++	IOBufferMemoryDescriptor *memory;
++	uint64_t gpu;                   /* the address the 3D core uses for it */
++	uint64_t size;
++	bool used;
++};
++
++#define kRedwoodBuffers 64
++
 +class RedwoodGPU;
 +
 +class RedwoodGPUUserClient : public IOUserClient {
 +	OSDeclareDefaultStructors(RedwoodGPUUserClient);
 +
++	RedwoodBuffer buffers[kRedwoodBuffers];
++
 +public:
 +	bool initWithTask(task_t owningTask, void *securityID, UInt32 type,
 +	    OSDictionary *properties) APPLE_KEXT_OVERRIDE;
 +	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++	IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options,
++	    IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
 +	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
 +	    IOExternalMethodDispatch *dispatch, OSObject *target, void *ref) APPLE_KEXT_OVERRIDE;
++
++private:
++	RedwoodBuffer *buffer_by_handle(uint32_t handle);
++	RedwoodBuffer *buffer_add(uint64_t size, uint32_t flags, uint32_t *handle);
++	void buffer_drop(RedwoodBuffer *b);
++	void drop_all(void);
 +};
 +
 +class RedwoodGPU : public IOService {
@@ -66,7 +157,7 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +		return false;
 +	}
 +	registerService();
-+	IOLog("RedwoodGPU: service published (A630: GET_PARAM only so far)\n");
++	IOLog("RedwoodGPU: service published (A630: GET_PARAM, GEM and mmap)\n");
 +	return true;
 +}
 +
@@ -92,12 +183,148 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +RedwoodGPUUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type,
 +    OSDictionary *properties)
 +{
-+	return IOUserClient::initWithTask(owningTask, securityID, type, properties);
++	if (!IOUserClient::initWithTask(owningTask, securityID, type, properties)) {
++		return false;
++	}
++	for (unsigned i = 0; i < kRedwoodBuffers; i++) {
++		buffers[i].memory = NULL;
++		buffers[i].gpu = 0;
++		buffers[i].size = 0;
++		buffers[i].used = false;
++	}
++	return true;
++}
++
++RedwoodBuffer *
++RedwoodGPUUserClient::buffer_by_handle(uint32_t handle)
++{
++	if (handle == 0 || handle > kRedwoodBuffers) {
++		return NULL;
++	}
++	RedwoodBuffer *b = &buffers[handle - 1];
++	return b->used ? b : NULL;
++}
++
++void
++RedwoodGPUUserClient::buffer_drop(RedwoodBuffer *b)
++{
++	if (b == NULL || !b->used) {
++		return;
++	}
++	if (b->gpu != 0) {
++		mi8_gpu_unmap(b->gpu, b->size);
++		mi8_gpu_address_free(b->gpu, b->size);
++	}
++	if (b->memory != NULL) {
++		b->memory->release();
++	}
++	b->memory = NULL;
++	b->gpu = 0;
++	b->size = 0;
++	b->used = false;
++}
++
++void
++RedwoodGPUUserClient::drop_all(void)
++{
++	for (unsigned i = 0; i < kRedwoodBuffers; i++) {
++		buffer_drop(&buffers[i]);
++	}
++}
++
++RedwoodBuffer *
++RedwoodGPUUserClient::buffer_add(uint64_t size, uint32_t flags, uint32_t *handle)
++{
++	if (size == 0 || size > (1ull << 31)) {
++		return NULL;
++	}
++	uint32_t slot = 0;
++	while (slot < kRedwoodBuffers && buffers[slot].used) {
++		slot++;
++	}
++	if (slot == kRedwoodBuffers) {
++		IOLog("RedwoodGPU: no free buffer slot\n");
++		return NULL;
++	}
++
++	vm_size_t bytes = (vm_size_t)((size + PAGE_MASK) & ~((uint64_t)PAGE_MASK));
++	/* contiguous, so getPhysicalAddress() describes the whole thing */
++	IOBufferMemoryDescriptor *mem = IOBufferMemoryDescriptor::withCapacity(bytes,
++	    kIODirectionInOut, true);
++	if (mem == NULL) {
++		IOLog("RedwoodGPU: cannot get %lu bytes for a buffer\n", (unsigned long)bytes);
++		return NULL;
++	}
++
++	uint64_t gpu = mi8_gpu_address(bytes);
++	if (gpu == 0) {
++		mem->release();
++		IOLog("RedwoodGPU: no GPU address for %lu bytes\n", (unsigned long)bytes);
++		return NULL;
++	}
++
++	IOPhysicalAddress phys = mem->getPhysicalAddress();
++	if (phys == 0) {
++		mi8_gpu_address_free(gpu, bytes);
++		mem->release();
++		IOLog("RedwoodGPU: buffer of %lu bytes has no physical address\n", (unsigned long)bytes);
++		return NULL;
++	}
++
++	/*
++	 * The core's page tables take 4 KB pages (keep_map: va >> 12), while
++	 * mi8_gpu_map() writes exactly one entry -- so one call per 4 KB, and the
++	 * allocation asked for contiguity so phys + offset is the next page.
++	 */
++	uint64_t mapped = 0;
++	bool read_only = (flags & MSM_BO_GPU_READONLY) != 0;
++	for (; mapped < bytes; mapped += 0x1000) {
++		if (!mi8_gpu_map(gpu + mapped, (uint64_t)phys + mapped, read_only)) {
++			break;
++		}
++	}
++	if (mapped < bytes) {
++		for (uint64_t off = 0; off < mapped; off += 0x1000) {
++			mi8_gpu_unmap(gpu + off, 0x1000);
++		}
++		mi8_gpu_address_free(gpu, bytes);
++		mem->release();
++		IOLog("RedwoodGPU: cannot map %lu bytes at phys %#llx (stopped at %#llx)\n",
++		    (unsigned long)bytes, (uint64_t)phys, gpu + mapped);
++		return NULL;
++	}
++	mi8_gpu_mapped();
++
++	RedwoodBuffer *b = &buffers[slot];
++	b->memory = mem;
++	b->gpu = gpu;
++	b->size = bytes;
++	b->used = true;
++	*handle = slot + 1;
++	IOLog("RedwoodGPU: buffer %u: %lu bytes, phys %#llx, GPU address %#llx\n",
++	    *handle, (unsigned long)bytes, (uint64_t)phys, gpu);
++	return b;
++}
++
++IOReturn
++RedwoodGPUUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options,
++    IOMemoryDescriptor **memory)
++{
++	RedwoodBuffer *b = buffer_by_handle(type);
++
++	(void)options;
++	if (b == NULL || b->memory == NULL) {
++		return kIOReturnNoMemory;
++	}
++	b->memory->retain();
++	*memory = b->memory;
++	return kIOReturnSuccess;
 +}
 +
 +IOReturn
 +RedwoodGPUUserClient::clientClose(void)
 +{
++	drop_all();
 +	terminate();
 +	return kIOReturnSuccess;
 +}
@@ -110,43 +337,165 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	(void)target;
 +	(void)ref;
 +
-+	if (selector != kMsmGetParam) {
-+		return kIOReturnUnsupported;
-+	}
-+	if (args->structureOutput == NULL || args->structureOutputSize < sizeof(struct msm_param)) {
++	if (args == NULL) {
 +		return kIOReturnBadArgument;
 +	}
 +
-+	struct msm_param *p = (struct msm_param *)args->structureOutput;
++	/*
++	 * The caller passes one buffer as input and the same one as output, so the
++	 * request is in structureInput; a few callers only fill the output side, and
++	 * then the request is there.
++	 */
++	const void *in = args->structureInput;
++	size_t inSize = args->structureInputSize;
++	void *out = args->structureOutput;
++	size_t outSize = args->structureOutputSize;
 +
-+	switch (p->param) {
-+	case MSM_PARAM_GPU_ID:
-+		p->value = 630;                 /* Adreno 630 */
-+		break;
-+	case MSM_PARAM_GMEM_SIZE:
-+		p->value = 0x80000;             /* 512 KB of tile memory */
-+		break;
-+	case MSM_PARAM_CHIP_ID:
-+		p->value = 0x06030001ull;
-+		break;
-+	case MSM_PARAM_MAX_FREQ:
-+		p->value = 710000000ull;
-+		break;
-+	case MSM_PARAM_NR_RINGS:
-+		p->value = 1;
-+		break;
++	if ((in == NULL || inSize == 0) && out != NULL) {
++		in = out;
++		inSize = outSize;
++	}
++	if (in == NULL || out == NULL || inSize == 0 || outSize == 0) {
++		return kIOReturnBadArgument;
++	}
++
++	switch (selector) {
++	case kMsmGetParam: {
++		/*
++		 * The whole struct is needed: pipe and param are index 0 and 1, and the
++		 * GEM structs share the same 32-byte shape.
++		 */
++		struct msm_param request;
++		struct msm_param answer;
++
++		if (inSize < sizeof(request) || outSize < sizeof(answer)) {
++			return kIOReturnBadArgument;
++		}
++		redwood_copy(&request, in, sizeof(request));
++		answer = request;
++		switch (request.param) {
++		case MSM_PARAM_GPU_ID:
++			answer.value = 630;
++			break;
++		case MSM_PARAM_GMEM_SIZE:
++			answer.value = 0x80000;
++			break;
++		case MSM_PARAM_CHIP_ID:
++			answer.value = 0x06030001ull;
++			break;
++		case MSM_PARAM_MAX_FREQ:
++			answer.value = 710000000ull;
++			break;
++		case MSM_PARAM_NR_RINGS:
++			answer.value = 1;
++			break;
++		default:
++			return kIOReturnUnsupported;
++		}
++		answer.len = sizeof(uint64_t);
++		redwood_copy(out, &answer, sizeof(answer));
++		return kIOReturnSuccess;
++	}
++
++	case kMsmGemNew: {
++		struct msm_gem_new request;
++		struct msm_gem_new answer;
++
++		if (inSize < sizeof(request) || outSize < sizeof(answer)) {
++			return kIOReturnBadArgument;
++		}
++		redwood_copy(&request, in, sizeof(request));
++		answer = request;
++		if (buffer_add(request.size, request.flags, &answer.handle) == NULL) {
++			return kIOReturnNoMemory;
++		}
++		redwood_copy(out, &answer, sizeof(answer));
++		return kIOReturnSuccess;
++	}
++
++	case kMsmGemInfo: {
++		struct msm_gem_info request;
++		struct msm_gem_info answer;
++		RedwoodBuffer *b;
++
++		if (inSize < sizeof(request) || outSize < sizeof(answer)) {
++			return kIOReturnBadArgument;
++		}
++		redwood_copy(&request, in, sizeof(request));
++		answer = request;
++		b = buffer_by_handle(request.handle);
++		if (b == NULL) {
++			return kIOReturnNotFound;
++		}
++		switch (request.info) {
++		case MSM_INFO_GET_IOVA:
++			answer.value = b->gpu;
++			break;
++		case MSM_INFO_GET_OFFSET:
++			answer.value = 0;
++			break;
++		default:
++			return kIOReturnUnsupported;
++		}
++		answer.len = sizeof(uint64_t);
++		redwood_copy(out, &answer, sizeof(answer));
++		return kIOReturnSuccess;
++	}
++
++	case kMsmGemCpuPrep: {
++		struct msm_gem_cpu_prep request;
++		RedwoodBuffer *b;
++
++		if (inSize < sizeof(request) || outSize < sizeof(request)) {
++			return kIOReturnBadArgument;
++		}
++		redwood_copy(&request, in, sizeof(request));
++		b = buffer_by_handle(request.handle);
++		if (b == NULL) {
++			return kIOReturnNotFound;
++		}
++		if ((request.op & MSM_PREP_NOSYNC) == 0) {
++			/* the GPU may read what the CPU wrote: make those writes visible */
++			mi8_gpu_to_memory(b->memory->getBytesNoCopy(), b->size);
++		}
++		redwood_copy(out, &request, sizeof(request));
++		return kIOReturnSuccess;
++	}
++
++	case kMsmGemCpuFini: {
++		struct msm_gem_cpu_fini request;
++		RedwoodBuffer *b;
++
++		if (inSize < sizeof(request) || outSize < sizeof(request)) {
++			return kIOReturnBadArgument;
++		}
++		redwood_copy(&request, in, sizeof(request));
++		b = buffer_by_handle(request.handle);
++		if (b == NULL) {
++			return kIOReturnNotFound;
++		}
++		redwood_copy(out, &request, sizeof(request));
++		return kIOReturnSuccess;
++	}
++
++	case kMsmGemClose: {
++		struct drm_gem_close request;
++
++		if (inSize < sizeof(request) || outSize < sizeof(request)) {
++			return kIOReturnBadArgument;
++		}
++		redwood_copy(&request, in, sizeof(request));
++		buffer_drop(buffer_by_handle(request.handle));
++		redwood_copy(out, &request, sizeof(request));
++		return kIOReturnSuccess;
++	}
++
 +	default:
 +		return kIOReturnUnsupported;
 +	}
-+	p->len = sizeof(uint64_t);
-+	return kIOReturnSuccess;
 +}
 +
-+/*
-+ * Called from bsd/dev/mi8_adreno.c, which is C: the symbol has to be the C one
-+ * (_RedwoodGPUStart), or the kernel links against a mangled name that nothing
-+ * defines -- which is exactly how this failed the first time.
-+ */
++/* Called from bsd/dev/mi8_adreno.c, which is C: the symbol must be the C one. */
 +extern "C" void
 +RedwoodGPUStart(void)
 +{

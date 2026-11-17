@@ -19,7 +19,7 @@ diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
 +			vm_size_t want = round_page(g3d_regions[r].size);
 +			bool got = false;
 +
-+			while (want >= PAGE_SIZE * 16) {
++			while (want >= PAGE_SIZE) {
 +				if (kmem_alloc_contig(kernel_map, &g3d_regions[r].memory, want, PAGE_MASK, 0, 0,
 +				    KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) == KERN_SUCCESS) {
 +					got = true;
