@@ -1,7 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,679 @@
+@@ -79,4 +79,677 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
@@ -17,6 +17,7 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 + */
 +#include <IOKit/IOUserClient.h>
 +#include <IOKit/IOBufferMemoryDescriptor.h>
++#include <libkern/copyio.h>   /* copyin() is a macro that checks __builtin_object_size */
 +
 +enum {
 +	kMsmGemClose          = 0x09,
@@ -143,9 +144,6 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +bool mi8_gpu_done(uint32_t fence);
 +uint32_t mi8_gpu_submit(const uint64_t *addresses, const uint32_t *words, uint32_t count);
 +bool mi8_gpu_ready(void);
-+
-+/* osfmk/arm64/copyio.c: int copyin(const user_addr_t, void *, vm_size_t) */
-+int copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes);
 +}
 +
 +struct RedwoodBuffer {
