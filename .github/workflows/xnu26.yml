@@ -37,6 +37,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clear deployment targets (Xcode 26 refuses more than one)
+        run: |
+          for v in MACOSX_DEPLOYMENT_TARGET IPHONEOS_DEPLOYMENT_TARGET TVOS_DEPLOYMENT_TARGET WATCHOS_DEPLOYMENT_TARGET DRIVERKIT_DEPLOYMENT_TARGET; do
+            echo "$v=" >> "$GITHUB_ENV"
+          done
+          env | grep -c DEPLOYMENT_TARGET || true
       - name: ccache
         uses: actions/cache@v4
         with:
