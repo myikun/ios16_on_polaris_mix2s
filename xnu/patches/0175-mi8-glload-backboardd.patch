@@ -1,7 +1,7 @@
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -252,6 +252,18 @@
+@@ -248,6 +248,21 @@
      CTLFLAG_RW, &vm_shared_region_reslide_aslr, 0, "");
  #endif
  #endif /* __has_feature(ptrauth_calls) */
@@ -17,10 +17,13 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 +SYSCTL_INT(_kern, OID_AUTO, sweet_glload_mx, CTLFLAG_RW | CTLFLAG_LOCKED, &sweet_glload_mx, 0,
 +    "DYLD_INSERT_LIBRARIES of the EAGL bridge's loader for the window server");
 +#define SWEET_GLLOAD_MX_ENV "DYLD_INSERT_LIBRARIES=/topaz/lib/libtopaz-inject.dylib"
++/* dyld says what it maps, on the console instead of the window server's /dev/null */
++#define SWEET_DYLD_PRINT_ENV "DYLD_PRINT_LIBRARIES=1"
++#define SWEET_DYLD_TOFILE_ENV "DYLD_PRINT_TO_FILE=/dev/console"
  
  #if DEVELOPMENT || DEBUG
  static TUNABLE(bool, enable_dext_coredumps_on_panic, "dext_panic_coredump", true);
-@@ -5763,6 +5775,27 @@
+@@ -5759,6 +5774,33 @@
  		imgp->ip_envc++;
  	}
  
@@ -32,17 +35,23 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 +	if (sweet_glload_mx &&
 +	    strnstr(imgp->ip_strings, "usr/libexec/backboardd", strlen(EXECUTABLE_KEY) + MAXPATHLEN) != NULL &&
 +	    strnstr(imgp->ip_strings, "DYLD_INSERT_LIBRARIES=", strlen(EXECUTABLE_KEY) + MAXPATHLEN) == NULL) {
++		static const char *const extra[] = {
++			SWEET_GLLOAD_MX_ENV, SWEET_DYLD_PRINT_ENV, SWEET_DYLD_TOFILE_ENV
++		};
++
 +		printf("sweet: backboardd is given the GL bridge (" SWEET_GLLOAD_MX_ENV ")\n");
-+		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(SWEET_GLLOAD_MX_ENV), UIO_SYSSPACE, TRUE);
-+		if (error) {
-+			goto bad;
++		for (unsigned i = 0; i < sizeof(extra) / sizeof(extra[0]); i++) {
++			error = exec_add_user_string(imgp, CAST_USER_ADDR_T(extra[i]), UIO_SYSSPACE, TRUE);
++			if (error) {
++				goto bad;
++			}
++			if (imgp->ip_argspace < new_ptr_size) {
++				error = E2BIG;
++				goto bad;
++			}
++			imgp->ip_argspace -= new_ptr_size;
++			imgp->ip_envc++;
 +		}
-+		if (imgp->ip_argspace < new_ptr_size) {
-+			error = E2BIG;
-+			goto bad;
-+		}
-+		imgp->ip_argspace -= new_ptr_size;
-+		imgp->ip_envc++;
 +	}
 +
  	/* Save space for envv[] NULL terminator */

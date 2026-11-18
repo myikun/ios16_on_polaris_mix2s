@@ -1,0 +1,35 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0177: let dyld honour DYLD_INSERT_LIBRARIES for the window server
+
+dyld refuses DYLD_* for a platform binary, and this port marks every binary on the root
+filesystem as one in sweet_amfi_vnode_check_signature(). It does honour them for a
+process that looks debuggable (CS_DEBUGGED), so the window server is marked debuggable
+too -- whether it is reached as /usr/libexec/backboardd or /usr/libexec/real/backboardd,
+its vnode name is "backboardd". Nothing else is affected.
+
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -254,6 +254,23 @@
+ 	mount_t mp = vnode_mount(vp);
+ 	if (mp != NULL && (vfs_flags(mp) & MNT_ROOTFS)) {
+ 		*cs_flags |= CS_PLATFORM_BINARY;
++		/*
++		 * dyld refuses DYLD_* for a platform binary unless CS_DEBUGGED is
++		 * set (it takes the process for one being debugged). The EAGL
++		 * bridge has to get into the window server, so that one program is
++		 * marked debuggable; everything else keeps the plain platform flag.
++		 */
++		const char *vn_name = vnode_getname(vp);
++
++		if (vn_name != NULL) {
++			if (vn_name[0] == 'b' && vn_name[1] == 'a' && vn_name[2] == 'c' &&
++			    vn_name[3] == 'k' && vn_name[4] == 'b' && vn_name[5] == 'o' &&
++			    vn_name[6] == 'a' && vn_name[7] == 'r' && vn_name[8] == 'd' &&
++			    vn_name[9] == 'd' && vn_name[10] == 'd' && vn_name[11] == 0) {
++				*cs_flags |= CS_DEBUGGED;
++			}
++			vnode_putname(vn_name);
++		}
+ 	}
+ 	if (cs_blob != cs_blob->csb_ro_addr && cs_blob->csb_entitlements == NULL) {
+ 		sweet_amfi_attach_entitlements(cs_blob);
