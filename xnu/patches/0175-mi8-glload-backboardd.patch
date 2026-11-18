@@ -1,0 +1,50 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -252,6 +252,18 @@
+     CTLFLAG_RW, &vm_shared_region_reslide_aslr, 0, "");
+ #endif
+ #endif /* __has_feature(ptrauth_calls) */
++
++/*
++ * mi8 0175: DYLD_INSERT_LIBRARIES for the window server, added while the kernel builds
++ * the environment of the process it is about to exec. A wrapper around execv() can set
++ * the variable, but nothing guarantees launchd hands it on; the kernel's own copy is in
++ * the environment from the start. SpringBoard draws through backboardd, so backboardd is
++ * where CoreAnimation's GL renderer has to appear.
++ */
++static int sweet_glload_mx = 1;
++SYSCTL_INT(_kern, OID_AUTO, sweet_glload_mx, CTLFLAG_RW | CTLFLAG_LOCKED, &sweet_glload_mx, 0,
++    "DYLD_INSERT_LIBRARIES of the EAGL bridge's loader for the window server");
++#define SWEET_GLLOAD_MX_ENV "DYLD_INSERT_LIBRARIES=/topaz/lib/libtopaz-inject.dylib"
+ 
+ #if DEVELOPMENT || DEBUG
+ static TUNABLE(bool, enable_dext_coredumps_on_panic, "dext_panic_coredump", true);
+@@ -5763,6 +5775,27 @@
+ 		imgp->ip_envc++;
+ 	}
+ 
++	/*
++	 * mi8 0175: the window server gets the EAGL bridge. Skipped when the caller
++	 * already named an inserted library (our wrapper does), so it cannot be
++	 * inserted twice, and skipped for anything that is not backboardd.
++	 */
++	if (sweet_glload_mx &&
++	    strnstr(imgp->ip_strings, "usr/libexec/backboardd", strlen(EXECUTABLE_KEY) + MAXPATHLEN) != NULL &&
++	    strnstr(imgp->ip_strings, "DYLD_INSERT_LIBRARIES=", strlen(EXECUTABLE_KEY) + MAXPATHLEN) == NULL) {
++		printf("sweet: backboardd is given the GL bridge (" SWEET_GLLOAD_MX_ENV ")\n");
++		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(SWEET_GLLOAD_MX_ENV), UIO_SYSSPACE, TRUE);
++		if (error) {
++			goto bad;
++		}
++		if (imgp->ip_argspace < new_ptr_size) {
++			error = E2BIG;
++			goto bad;
++		}
++		imgp->ip_argspace -= new_ptr_size;
++		imgp->ip_envc++;
++	}
++
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+ 		error = E2BIG;

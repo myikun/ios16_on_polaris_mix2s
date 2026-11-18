@@ -1,7 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,713 @@
+@@ -79,4 +79,726 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
@@ -238,6 +238,19 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +{
 +	if (!IOUserClient::initWithTask(owningTask, securityID, type, properties)) {
 +		return false;
++	}
++	{
++		/*
++		 * Who is this? The test program, or the window server through the
++		 * injected GL library -- which is the thing we cannot see otherwise.
++		 */
++		pid_t who = 0;
++		char name[64] = "?";
++
++		if (pid_for_task(owningTask, &who) == KERN_SUCCESS) {
++			proc_name(who, name, sizeof(name));
++		}
++		IOLog("RedwoodGPU: opened by %s[%d]\n", name, (int)who);
 +	}
 +	for (unsigned i = 0; i < kRedwoodBuffers; i++) {
 +		buffers[i].memory = NULL;
