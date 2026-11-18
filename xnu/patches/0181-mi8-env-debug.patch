@@ -1,0 +1,34 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0181: print the environment the window server is given
+
+The daemon exits without a crash and dyld says nothing, so this shows whether the
+injected DYLD_* strings are in the environment at all.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5805,6 +5805,24 @@
+ 		 * environment injected by 0175 reaches it.
+ 		 */
+ 		imgp->ip_csflags &= ~CS_PLATFORM_BINARY;
++		/*
++		 * mi8 0181: what did the environment end up holding? The last strings
++		 * are the three this code adds; if they are not here, the injection never
++		 * reached the program and dyld is not at fault.
++		 */
++		{
++			const char *s = imgp->ip_strings;
++			unsigned shown = 0;
++
++			printf("sweet: backboardd environment: %u strings\n", imgp->ip_envc);
++			while (s != NULL && *s != 0 && shown < 64) {
++				if (strncmp(s, "DYLD_", 5) == 0) {
++					printf("sweet:   env: %s\n", s);
++				}
++				s += strlen(s) + 1;
++				shown++;
++			}
++		}
+ 		printf("sweet: backboardd is not a platform binary; dyld reads its environment\n");
+ 		printf("sweet: backboardd may load a library that is not Apple's\n");
+ 		printf("sweet: backboardd is marked debuggable so dyld takes its DYLD_* variables\n");
