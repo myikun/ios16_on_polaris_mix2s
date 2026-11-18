@@ -19,7 +19,7 @@ reached the window server. Cleared for that executable alone.
 +		 * platform binary. Clear the flag for the window server only, so the
 +		 * environment injected by 0175 reaches it.
 +		 */
-+		imgp->ip_csflags &= ~CS_PLATFORM;
++		imgp->ip_csflags &= ~CS_PLATFORM_BINARY;
 +		printf("sweet: backboardd is not a platform binary; dyld reads its environment\n");
  		printf("sweet: backboardd may load a library that is not Apple's\n");
  		printf("sweet: backboardd is marked debuggable so dyld takes its DYLD_* variables\n");
