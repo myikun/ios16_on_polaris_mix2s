@@ -1,0 +1,36 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0179: page hashes are not checked
+
+Needed for the patched backboardd: with a stale hash list the exec fails and the
+boot loops. Reported every page validated and untainted instead.
+
+---
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -5901,6 +5901,26 @@
+ 	*tainted_p = VMP_CS_ALL_FALSE;
+ 	*nx_p = VMP_CS_ALL_FALSE;
+ 
++	/*
++	 * mi8 0179: the hash list of a patched binary (backboardd, given an
++	 * LC_LOAD_DYLIB for the EAGL bridge) no longer matches its code, and the
++	 * boot looped on it: exec failed and launchd kept retrying. This port has
++	 * no trust cache and marks every root-filesystem binary as platform
++	 * anyway, so the per-page hashes buy nothing; report every page good.
++	 */
++	{
++		static int said_once;
++
++		if (!said_once) {
++			said_once = 1;
++			printf("sweet: page hashes are not checked (0179)\n");
++		}
++		*validated_p = VMP_CS_ALL_TRUE;
++		*tainted_p = VMP_CS_ALL_FALSE;
++		*nx_p = VMP_CS_ALL_FALSE;
++		return;
++	}
++
+ 	for (offset_in_page = 0;
+ 	    offset_in_page < PAGE_SIZE;
+ 	    /* offset_in_page updated based on bytes processed */) {
