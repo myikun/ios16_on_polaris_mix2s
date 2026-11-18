@@ -1,7 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,688 @@
+@@ -79,4 +79,713 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
@@ -449,6 +449,31 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	}
 +	if (submits < 16) {
 +		IOLog("RedwoodGPU: submit %u: %u command(s), fence %u\n", submits, request->nr_cmds, fence);
++	}
++	if (submits <= 4) {
++		/*
++		 * The biggest buffer is the framebuffer. Invalidate the cache over its
++		 * first line and print what is there: if the core drew the clear, these
++		 * words are the colour the program asked for.
++		 */
++		RedwoodBuffer *big = NULL;
++
++		for (unsigned i = 0; i < kRedwoodBuffers; i++) {
++			if (buffers[i].memory != NULL && (big == NULL || buffers[i].size > big->size)) {
++				big = &buffers[i];
++			}
++		}
++		if (big != NULL && big->memory->getBytesNoCopy() != NULL) {
++			volatile uint32_t *p = (volatile uint32_t *)big->memory->getBytesNoCopy();
++			vm_offset_t base = (vm_offset_t)p;
++
++			for (vm_offset_t a = base; a < base + 64; a += 64) {
++				__asm__ volatile ("dc ivac, %0" :: "r" (a) : "memory");
++			}
++			__asm__ volatile ("dsb sy" ::: "memory");
++			IOLog("RedwoodGPU: after submit %u, the %llu byte buffer at GPU %#llx has %08x %08x %08x %08x %08x %08x %08x %08x\n",
++			    submits, big->size, big->gpu, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
++		}
 +	}
 +	submits++;
 +	request->fence = fence;
