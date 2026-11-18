@@ -1,0 +1,26 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0180: backboardd is not a platform binary
+
+dyld discards DYLD_* for a platform binary. This port marks every root-filesystem
+binary as one in its AMFI stand-in, which is why the injected environment never
+reached the window server. Cleared for that executable alone.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5797,6 +5797,15 @@
+ 		 * startup (seventeen execs, not one crash). Clear it for this one binary.
+ 		 */
+ 		imgp->ip_csflags &= ~CS_REQUIRE_LV;
++		/*
++		 * hakios (the reference port) lets dyld honour DYLD_INSERT_LIBRARIES by not
++		 * marking root-filesystem binaries as platform binaries at all; this port
++		 * does mark them (0035), and dyld throws every DYLD_* variable away for a
++		 * platform binary. Clear the flag for the window server only, so the
++		 * environment injected by 0175 reaches it.
++		 */
++		imgp->ip_csflags &= ~CS_PLATFORM;
++		printf("sweet: backboardd is not a platform binary; dyld reads its environment\n");
+ 		printf("sweet: backboardd may load a library that is not Apple's\n");
+ 		printf("sweet: backboardd is marked debuggable so dyld takes its DYLD_* variables\n");
+ 		static const char *const extra[] = {
