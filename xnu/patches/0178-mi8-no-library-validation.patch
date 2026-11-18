@@ -1,0 +1,26 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0178: clear CS_REQUIRE_LV for the window server
+
+dyld refuses to load the EAGL bridge into backboardd: the daemon is exec'd
+seventeen times with no crash report, which is dyld exiting because library
+validation rejects a library that is not signed by Apple. The flag is cleared
+for that one binary, next to the CS_DEBUGGED setting of 0177.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5790,6 +5790,14 @@
+ 		 * nothing clears this bit on the way.
+ 		 */
+ 		imgp->ip_csflags |= CS_DEBUGGED;
++		/*
++		 * A platform binary carries CS_REQUIRE_LV, and library validation then
++		 * admits only libraries signed by Apple: the bridge in /topaz/lib is
++		 * ad-hoc signed, so dyld refuses it and the window server exits during
++		 * startup (seventeen execs, not one crash). Clear it for this one binary.
++		 */
++		imgp->ip_csflags &= ~CS_REQUIRE_LV;
++		printf("sweet: backboardd may load a library that is not Apple's\n");
+ 		printf("sweet: backboardd is marked debuggable so dyld takes its DYLD_* variables\n");
+ 		static const char *const extra[] = {
+ 			SWEET_GLLOAD_MX_ENV, SWEET_DYLD_PRINT_ENV, SWEET_DYLD_TOFILE_ENV
