@@ -1,7 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,677 @@
+@@ -79,4 +79,688 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
@@ -303,8 +303,15 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	}
 +
 +	vm_size_t bytes = (vm_size_t)((size + 0xfff) & ~(uint64_t)0xfff);
-+	IOBufferMemoryDescriptor *mem = IOBufferMemoryDescriptor::withCapacity(bytes,
-+	    kIODirectionInOut, true);
++	/*
++	 * withCapacity() adds kIOMemoryUnshared, and a buffer the kernel keeps to
++	 * itself cannot be mapped into the program: IOConnectMapMemory64 fails, Mesa
++	 * gets MAP_FAILED and writes into it. kIOMemoryKernelUserShared is what makes
++	 * clientMemoryForType() usable.
++	 */
++	IOBufferMemoryDescriptor *mem = IOBufferMemoryDescriptor::withOptions(
++	    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryPhysicallyContiguous,
++	    bytes, PAGE_SIZE);
 +	if (mem == NULL) {
 +		IOLog("RedwoodGPU: cannot get %lu bytes for a buffer\n", (unsigned long)bytes);
 +		return NULL;
@@ -363,7 +370,11 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +
 +	(void)options;
 +	if (b == NULL || b->memory == NULL) {
++		IOLog("RedwoodGPU: map request for type %u: no such buffer\n", type);
 +		return kIOReturnNoMemory;
++	}
++	if (calls < 64) {
++		IOLog("RedwoodGPU: map request for buffer %u (%llu bytes)\n", type, b->size);
 +	}
 +	b->memory->retain();
 +	*memory = b->memory;
