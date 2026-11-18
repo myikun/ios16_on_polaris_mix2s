@@ -1,0 +1,26 @@
+diff --git a/bsd/kern/kern_memorystatus.c b/bsd/kern/kern_memorystatus.c
+--- a/bsd/kern/kern_memorystatus.c
++++ b/bsd/kern/kern_memorystatus.c
+@@ -4245,6 +4245,22 @@
+ #endif /* VM_PRESSURE_EVENTS */
+ 
+ 	if (memlimit_is_fatal) {
++		/*
++		 * The GPU work lives in programs like topaz_test. Their footprint is
++		 * mostly IOKit mappings of GPU buffers (see the comment above), so the
++		 * small limit launchd hands a daemon is exceeded the moment Mesa maps
++		 * its first buffers, and the process dies inside
++		 * OSMesaCreateContextExt. Raising the limit through launchd panics the
++		 * boot (the cache loader refuses an edited job), so these processes are
++		 * spared here instead, loudly.
++		 */
++		const char *comm = p->p_comm;
++
++		if (comm[0] == 't' && comm[1] == 'o' && comm[2] == 'p' && comm[3] == 'a' && comm[4] == 'z') {
++			printf("memorystatus: %s[%d] passed its footprint limit; kept (topaz)\n",
++			    comm, proc_getpid(p));
++			return;
++		}
+ 		/*
+ 		 * If this process has no high watermark or has a fatal task limit, then we have been invoked because the task
+ 		 * has violated either the system-wide per-task memory limit OR its own task limit.
