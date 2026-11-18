@@ -18,6 +18,7 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +#include <IOKit/IOUserClient.h>
 +#include <IOKit/IOBufferMemoryDescriptor.h>
 +#include <libkern/copyio.h>   /* copyin() is a macro that checks __builtin_object_size */
++#include <sys/proc_internal.h>   /* proc_t, p_comm, proc_getpid, current_proc */
 +
 +enum {
 +	kMsmGemClose          = 0x09,
@@ -243,14 +244,13 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +		/*
 +		 * Who is this? The test program, or the window server through the
 +		 * injected GL library -- which is the thing we cannot see otherwise.
++		 * initWithTask() runs in the opener's context, so current_proc() is it.
 +		 */
-+		pid_t who = 0;
-+		char name[64] = "?";
++		proc_t opener = current_proc();
 +
-+		if (pid_for_task(owningTask, &who) == KERN_SUCCESS) {
-+			proc_name(who, name, sizeof(name));
-+		}
-+		IOLog("RedwoodGPU: opened by %s[%d]\n", name, (int)who);
++		IOLog("RedwoodGPU: opened by %s[%d]\n",
++		    opener != NULL ? opener->p_comm : "?",
++		    opener != NULL ? proc_getpid(opener) : 0);
 +	}
 +	for (unsigned i = 0; i < kRedwoodBuffers; i++) {
 +		buffers[i].memory = NULL;
