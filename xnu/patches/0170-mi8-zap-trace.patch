@@ -1,0 +1,108 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -4763,6 +4763,25 @@
+ 	return -1000;
+ }
+ 
++/*
++ * A zap stage marker that is certain to be in the ring before the next stage runs:
++ * zap_load talks to TrustZone and writes physical memory, and a panic there leaves
++ * nothing else behind. mi8gpu_zap_only=N stops after stage N, for bisecting.
++ */
++static uint32_t zap_only_limit;
++
++static bool
++zap_mark(uint32_t stage, const char *what)
++{
++	printf("mi8gpu: [zap %u] %s\n", stage, what);
++	sleep_us(2000);
++	if (stage >= zap_only_limit) {
++		printf("mi8gpu: [zap] stopped after stage %u (mi8gpu_zap_only)\n", stage);
++		return true;
++	}
++	return false;
++}
++
+ static bool
+ zap_load(bool keep)
+ {
+@@ -4776,13 +4795,22 @@
+ 
+ 	zap_authenticated = false;
+ 
+-	printf("mi8gpu: zap probe: this talks to TrustZone with memory (PAS id %u)\n", ZAP_PAS_ID);
++	zap_only_limit = 99;
++	PE_parse_boot_argn("mi8gpu_zap_only", &zap_only_limit, sizeof(zap_only_limit));
++	printf("mi8gpu: zap probe: this talks to TrustZone with memory (PAS id %u), limit %u\n",
++	    ZAP_PAS_ID, zap_only_limit);
+ 	if (mdt == NULL || seg == NULL || mdt_size != 6684 || seg_size != 0x7b0) {
+ 		printf("mi8gpu: zap files missing or not the expected size (mdt %llu, b02 %llu)\n", mdt_size, seg_size);
+ 		return false;
+ 	}
++	if (zap_mark(1, "the metadata and the segment are there")) {
++		return false;
++	}
+ 	rc = mi8_scm_call(how | MI8_SCM_SUPPORTED, 1, ZAP_PAS_ID, 0, 0, res);
+ 	printf("mi8gpu: PAS_SUPPORTED(13): rc %lld result %#llx\n", rc, res[0]);
++	if (zap_mark(2, "PAS_SUPPORTED answered")) {
++		return false;
++	}
+ 
+ 	/* Physically contiguous and page aligned, as dma_alloc_coherent gives Linux's; it is never given back. */
+ 	if (kmem_alloc_contig(kernel_map, &meta, round_page(mdt_size), PAGE_MASK, 0, 0, KMA_KOBJECT | KMA_ZERO | KMA_DATA,
+@@ -4795,9 +4823,16 @@
+ 		printf("mi8gpu: metadata buffer %#llx is not 4 KB aligned/contiguous (page size %lu)\n", metadata_phys, (unsigned long)PAGE_SIZE);
+ 		return false;
+ 	}
++	if (zap_mark(3, "the metadata buffer is physically contiguous")) {
++		return false;
++	}
+ 	memcpy((void *)meta, mdt, mdt_size);
+ 	to_memory(meta, round_page(mdt_size));
+ 	region = ml_io_map(ZAP_REGION_PHYS, ZAP_REGION_SIZE);
++	if (region == 0) {
++		printf("mi8gpu: cannot map the zap carve-out at %#lx\n", ZAP_REGION_PHYS);
++		return false;
++	}
+ 
+ 	printf("mi8gpu: PAS_INIT_IMAGE(13): metadata %llu bytes at %#llx (buffer is never touched or freed after this)\n",
+ 	    mdt_size, metadata_phys);
+@@ -4805,6 +4840,9 @@
+ 	printf("mi8gpu: PAS_INIT_IMAGE: rc %lld result %#llx %#llx %#llx\n", rc, res[0], res[1], res[2]);
+ 	if (rc != 0 || res[0] != 0) {
+ 		return false;
++	}
++	if (zap_mark(4, "PAS_INIT_IMAGE accepted the metadata")) {
++		goto out;
+ 	}
+ 	shutdown_needed = true;
+ 	printf("mi8gpu: PAS_MEM_SETUP(13, %#lx, %#x)\n", ZAP_REGION_PHYS, 0x1000);
+@@ -4813,6 +4851,9 @@
+ 	if (rc != 0 || res[0] != 0) {
+ 		goto out;
+ 	}
++	if (zap_mark(5, "PAS_MEM_SETUP accepted the carve-out")) {
++		goto out;
++	}
+ 	for (uint32_t i = 0; i < 0x7b0 / 4; i++) {
+ 		wr(region + 4 * i, ((const uint32_t *)seg)[i]);
+ 	}
+@@ -4823,6 +4864,9 @@
+ 	}
+ 	printf("mi8gpu: zap segment (%#x bytes) written to the reserved region; %u words read back wrong\n", 0x7b0, wrong);
+ 	if (wrong) {
++		goto out;
++	}
++	if (zap_mark(6, "the segment is in the carve-out")) {
+ 		goto out;
+ 	}
+ 	printf("mi8gpu: PAS_AUTH_AND_RESET(13)\n");
+@@ -4830,6 +4874,7 @@
+ 	printf("mi8gpu: PAS_AUTH_AND_RESET: rc %lld result %#llx %#llx %#llx -- %s\n", rc, res[0], res[1], res[2],
+ 	    (rc == 0 && res[0] == 0) ? "ZAP AUTHENTICATED" : "authentication refused");
+ 	zap_authenticated = rc == 0 && res[0] == 0;
++	(void)zap_mark(7, "PAS_AUTH_AND_RESET answered");
+ out:
+ 	if (shutdown_needed && !(keep && zap_authenticated)) {
+ 		rc = mi8_scm_call(how | 0x206, 1, ZAP_PAS_ID, 0, 0, res);
