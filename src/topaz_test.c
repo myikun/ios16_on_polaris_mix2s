@@ -1,4 +1,4 @@
-/*
+﻿/*
  * topaz_test: the same ground gl_test covers, but loud, and it explains its own crash.
  *
  * Two things learned the hard way:
@@ -18,6 +18,7 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <sys/ucontext.h>
+#include <syslog.h>
 
 typedef void *OSMesaContext;
 extern OSMesaContext OSMesaCreateContextExt(unsigned format, int depth, int stencil,
@@ -40,10 +41,25 @@ extern void glViewport(int x, int y, int w, int h);
 #define GL_COLOR_BUFFER_BIT 0x00004000
 #define GL_MAX_TEXTURE_SIZE 0x0D33
 
+/*
+ * stdout goes to /dev/console, which does not always reach the kernel's console
+ * ring; syslog always does. Every line goes to both.
+ */
 static void
 say(const char *what)
 {
 	printf("topaz_test: %s\n", what);
+	syslog(LOG_NOTICE, "topaz_test: %s", what);
+}
+
+static void
+note(const char *fmt, int a, int b, int c, int d)
+{
+	char line[128];
+
+	snprintf(line, sizeof(line), fmt, a, b, c, d);
+	printf("topaz_test: %s\n", line);
+	syslog(LOG_NOTICE, "topaz_test: %s", line);
 }
 
 static void
@@ -111,7 +127,7 @@ main(int argc, char **argv)
 		width = atoi(argv[1]);
 		height = atoi(argv[2]);
 	}
-	printf("topaz_test: target %dx%d\n", width, height);
+	note("target %d x %d", width, height, 0, 0);
 
 	say("OSMesaCreateContextExt");
 	ctx = OSMesaCreateContextExt(OSMESA_RGBA, 24, 8, 0, NULL);
@@ -136,7 +152,7 @@ main(int argc, char **argv)
 	say("current");
 
 	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &one);
-	printf("topaz_test: GL_MAX_TEXTURE_SIZE %d\n", one);
+	note("GL_MAX_TEXTURE_SIZE %d", one, 0, 0, 0);
 
 	say("glViewport");
 	glViewport(0, 0, width, height);
@@ -151,8 +167,7 @@ main(int argc, char **argv)
 
 	say("glReadPixels");
 	glReadPixels(width / 2, height / 2, 1, 1, OSMESA_RGBA, GL_UNSIGNED_BYTE, &pixels[0]);
-	printf("topaz_test: centre pixel %02x %02x %02x %02x\n",
-	    pixels[0], pixels[1], pixels[2], pixels[3]);
+	note("centre pixel %02x %02x %02x %02x", pixels[0], pixels[1], pixels[2], pixels[3]);
 
 	say("OSMesaDestroyContext");
 	OSMesaDestroyContext(ctx);
@@ -160,3 +175,4 @@ main(int argc, char **argv)
 
 	return 0;
 }
+
