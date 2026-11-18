@@ -1,21 +1,24 @@
 /*
- * topaz_test: the same ground gl_test covers, but loud.
+ * topaz_test: the same ground gl_test covers, but loud, and it explains its own crash.
  *
- * gl_test died without a single line of output: launchd sends its stdout to a file,
- * stdio buffers that, and a SIGKILL throws the buffer away. This program sets stdout
- * unbuffered and prints before and after every step, so the log shows exactly which
- * call the GPU stack fails on.
- *
- * Built in the userland workflow against the libOSMesa that workflow produces:
- *   clang -target arm64-apple-ios16.0 -isysroot $SDK -O1 \
- *       -framework CoreFoundation -framework IOKit libOSMesa.8.dylib \
- *       -o topaz_test topaz_test.c
+ * Two things learned the hard way:
+ *   - launchd sends stdout to a file, stdio buffers it, and a SIGKILL throws the
+ *     buffer away, which is why gl_test died without a single line. stdout is
+ *     unbuffered here and every step is printed before and after.
+ *   - after the buffers are mapped, the crash is inside Mesa, and a bare pc tells us
+ *     nothing. So the handlers below resolve every frame with dladdr and print
+ *     "image+offset (symbol)", which is enough to read the name off libOSMesa's
+ *     symbol table.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <unistd.h>
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <sys/ucontext.h>
 
-/* OSMesa's ES entry points, as eagl.c and gl_test declare them */
 typedef void *OSMesaContext;
 extern OSMesaContext OSMesaCreateContextExt(unsigned format, int depth, int stencil,
     int accum, OSMesaContext share);
@@ -31,21 +34,64 @@ extern void glReadPixels(int x, int y, int width, int height, unsigned format,
     unsigned type, void *pixels);
 extern void glGetIntegerv(unsigned pname, int *params);
 extern void glViewport(int x, int y, int w, int h);
-extern void glEnable(unsigned cap);
-extern void glDisable(unsigned cap);
 
 #define OSMESA_RGBA 0x1908
 #define GL_UNSIGNED_BYTE 0x1401
 #define GL_COLOR_BUFFER_BIT 0x00004000
 #define GL_MAX_TEXTURE_SIZE 0x0D33
-#define GL_RENDERER 0x1F01
-#define GL_VERSION 0x1F02
 
 static void
 say(const char *what)
 {
 	printf("topaz_test: %s\n", what);
+}
+
+static void
+where(const char *tag, void *addr)
+{
+	Dl_info info;
+
+	if (dladdr(addr, &info) && info.dli_fname != NULL) {
+		printf("topaz_test:   %s %p = %s+0x%lx (%s)\n", tag, addr, info.dli_fname,
+		    (unsigned long)((char *)addr - (char *)info.dli_fbase),
+		    info.dli_sname != NULL ? info.dli_sname : "?");
+	} else {
+		printf("topaz_test:   %s %p (no image)\n", tag, addr);
+	}
+}
+
+static void
+on_signal(int sig, siginfo_t *si, void *context)
+{
+	void *frames[32];
+	int n;
+
+	printf("\ntopaz_test: signal %d at %p\n", sig, si != NULL ? si->si_addr : NULL);
+	if (context != NULL) {
+		ucontext_t *uc = (ucontext_t *)context;
+		where("pc", (void *)uc->uc_mcontext->__ss.__pc);
+		where("lr", (void *)uc->uc_mcontext->__ss.__lr);
+	}
+	n = backtrace(frames, 32);
+	for (int i = 0; i < n; i++) {
+		where("bt", frames[i]);
+	}
 	fflush(stdout);
+	_exit(70);
+}
+
+static void
+crash_handlers(void)
+{
+	struct sigaction sa;
+	int sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGTRAP };
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_sigaction = on_signal;
+	sa.sa_flags = SA_SIGINFO;
+	for (unsigned i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++) {
+		sigaction(sigs[i], &sa, NULL);
+	}
 }
 
 int
@@ -58,6 +104,7 @@ main(int argc, char **argv)
 
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
+	crash_handlers();
 
 	say("start");
 	if (argc > 2) {
@@ -65,7 +112,6 @@ main(int argc, char **argv)
 		height = atoi(argv[2]);
 	}
 	printf("topaz_test: target %dx%d\n", width, height);
-	fflush(stdout);
 
 	say("OSMesaCreateContextExt");
 	ctx = OSMesaCreateContextExt(OSMESA_RGBA, 24, 8, 0, NULL);
@@ -89,13 +135,8 @@ main(int argc, char **argv)
 	}
 	say("current");
 
-	if (OSMesaGetProcAddress("glGetIntegerv") != NULL) {
-		say("query GL_RENDERER");
-		/* no glGetString here: eagl owns the string table; the numbers are enough */
-		glGetIntegerv(GL_MAX_TEXTURE_SIZE, &one);
-		printf("topaz_test: GL_MAX_TEXTURE_SIZE %d\n", one);
-		fflush(stdout);
-	}
+	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &one);
+	printf("topaz_test: GL_MAX_TEXTURE_SIZE %d\n", one);
 
 	say("glViewport");
 	glViewport(0, 0, width, height);
@@ -112,7 +153,6 @@ main(int argc, char **argv)
 	glReadPixels(width / 2, height / 2, 1, 1, OSMESA_RGBA, GL_UNSIGNED_BYTE, &pixels[0]);
 	printf("topaz_test: centre pixel %02x %02x %02x %02x\n",
 	    pixels[0], pixels[1], pixels[2], pixels[3]);
-	fflush(stdout);
 
 	say("OSMesaDestroyContext");
 	OSMesaDestroyContext(ctx);
