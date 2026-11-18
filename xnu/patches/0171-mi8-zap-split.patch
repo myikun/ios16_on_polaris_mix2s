@@ -1,0 +1,52 @@
+diff --git a/bsd/dev/mi8_adreno.c b/bsd/dev/mi8_adreno.c
+--- a/bsd/dev/mi8_adreno.c
++++ b/bsd/dev/mi8_adreno.c
+@@ -4826,13 +4826,18 @@
+ 	if (zap_mark(3, "the metadata buffer is physically contiguous")) {
+ 		return false;
+ 	}
+-	memcpy((void *)meta, mdt, mdt_size);
+-	to_memory(meta, round_page(mdt_size));
+-	region = ml_io_map(ZAP_REGION_PHYS, ZAP_REGION_SIZE);
+-	if (region == 0) {
+-		printf("mi8gpu: cannot map the zap carve-out at %#lx\n", ZAP_REGION_PHYS);
+-		return false;
+-	}
++	printf("mi8gpu: [zap 3a] copying %llu bytes of metadata, 4 bytes at a time\n", mdt_size);
++	for (uint32_t i = 0; i < mdt_size; i += 4) {
++		uint32_t w = 0;
++
++		for (uint32_t b = 0; b < 4 && i + b < mdt_size; b++) {
++			w |= (uint32_t)mdt[i + b] << (8 * b);
++		}
++		*(volatile uint32_t *)(meta + i) = w;
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++	printf("mi8gpu: [zap 3b] metadata copied, first word %#x\n", *(volatile uint32_t *)meta);
++	sleep_us(2000);
+ 
+ 	printf("mi8gpu: PAS_INIT_IMAGE(13): metadata %llu bytes at %#llx (buffer is never touched or freed after this)\n",
+ 	    mdt_size, metadata_phys);
+@@ -4854,6 +4859,13 @@
+ 	if (zap_mark(5, "PAS_MEM_SETUP accepted the carve-out")) {
+ 		goto out;
+ 	}
++	region = ml_io_map(ZAP_REGION_PHYS, ZAP_REGION_SIZE);
++	printf("mi8gpu: [zap 5a] the carve-out maps at %#lx (physical %#lx)\n", region, ZAP_REGION_PHYS);
++	sleep_us(2000);
++	if (region == 0) {
++		printf("mi8gpu: cannot map the zap carve-out\n");
++		goto out;
++	}
+ 	for (uint32_t i = 0; i < 0x7b0 / 4; i++) {
+ 		wr(region + 4 * i, ((const uint32_t *)seg)[i]);
+ 	}
+@@ -4862,7 +4874,7 @@
+ 	for (uint32_t i = 0; i < 0x7b0 / 4; i++) {
+ 		wrong += rd(region + 4 * i) != ((const uint32_t *)seg)[i];
+ 	}
+-	printf("mi8gpu: zap segment (%#x bytes) written to the reserved region; %u words read back wrong\n", 0x7b0, wrong);
++	printf("mi8gpu: [zap 6] segment written; %u words read back wrong\n", wrong);
+ 	if (wrong) {
+ 		goto out;
+ 	}
