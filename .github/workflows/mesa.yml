@@ -1,18 +1,14 @@
 name: mesa
 
-# The whole GPU user space, built by someone else's proven pipeline instead of my
-# own guesses: this is limonetexd/ios-sweet-gpu's .github/workflows/userland.yml,
-# run against the same pinned donors, with the output uploaded here.
+# Builds the GPU user space with ios-sweet-gpu's pipeline (their pinned donors and
+# their build script, unchanged), then builds topaz_test against the libOSMesa that
+# came out of it.
 #
-# It produces, in one run:
-#   libOSMesa.8.dylib      Mesa 25.0.7 freedreno+softpipe, iOS arm64
-#   libtopaz-gl.dylib      eagl.c + gl_osmesa.c  (the EAGL-on-OSMesa shim)
-#   libtopaz-inject.dylib  the backboardd loader
-#   backboardd             the replacement window server binary
-#   gl_test                a triangle drawn with OSMesa and read back
+# topaz_test exists because gl_test died silently: launchd redirects stdout to a file,
+# stdio buffers it, and a SIGKILL loses the buffer. topaz_test sets stdout unbuffered
+# and prints before and after every step.
 #
-# Their recipe also documents the trap that cost us a round: the iOS SDK has no
-# IOKit headers, so the build copies them from the macOS SDK.
+# Upload: out/ -- libOSMesa.8.dylib, the topaz libraries, gl_test, topaz_test.
 
 on:
   workflow_dispatch:
@@ -31,7 +27,7 @@ jobs:
           git clone -q https://github.com/oosexgang/hackios-xnu-kernel donor/hackios
           git -C donor/hackios checkout -q a3384e031eb1e605cf37adaefc19991f04f6274b
           git clone -q https://github.com/limonetexd/ios-sweet-gpu sweetgpu
-          echo "--- their build script:"; ls -l sweetgpu/userland/build-gpu.sh
+          ls -l sweetgpu/userland/build-gpu.sh
 
       - name: Tools
         run: |
@@ -39,16 +35,34 @@ jobs:
           export PATH="$(brew --prefix bison)/bin:$PATH"
           bison --version | head -1
 
-      - name: Build the user space (their script, unchanged)
+      - name: Build the user space (their script)
         run: |
           export PATH="$(brew --prefix bison)/bin:$PATH"
-          bash sweetgpu/userland/build-gpu.sh donor out 2>&1 | tail -60
+          bash sweetgpu/userland/build-gpu.sh donor out 2>&1 | tail -40
+
+      - name: Build topaz_test against libOSMesa
+        if: always()
+        run: |
+          set +e
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK=$SDK"
+          ls -l out/
+          if [ -f out/libOSMesa.8.dylib ]; then
+            xcrun --sdk iphoneos clang -target arm64-apple-ios16.0 -isysroot "$SDK" -O1 \
+              -framework CoreFoundation -framework IOKit \
+              src/topaz_test.c out/libOSMesa.8.dylib -o out/topaz_test
+            echo "clang exit: $?"
+            file out/topaz_test
+            codesign -f -s - out/topaz_test && echo signed
+          else
+            echo "no libOSMesa to link against"
+          fi
 
       - name: What we got
         if: always()
         run: |
-          ls -l out 2>/dev/null || echo "(no out/)"
-          for f in out/*.dylib out/backboardd out/gl_test; do
+          ls -l out || true
+          for f in out/*.dylib out/topaz_test out/gl_test; do
             [ -f "$f" ] && file "$f"
           done
 
