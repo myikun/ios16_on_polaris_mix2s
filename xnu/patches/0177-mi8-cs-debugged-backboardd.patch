@@ -1,35 +1,37 @@
 From: mi8 <mi8@local>
-Subject: [PATCH] mi8-0177: let dyld honour DYLD_INSERT_LIBRARIES for the window server
+Subject: [PATCH] mi8-0177b: mark the window server debuggable from kern_exec
 
-dyld refuses DYLD_* for a platform binary, and this port marks every binary on the root
-filesystem as one in sweet_amfi_vnode_check_signature(). It does honour them for a
-process that looks debuggable (CS_DEBUGGED), so the window server is marked debuggable
-too -- whether it is reached as /usr/libexec/backboardd or /usr/libexec/real/backboardd,
-its vnode name is "backboardd". Nothing else is affected.
+The first attempt patched sweet_amfi.c, but that patch never applied (the build log says
+"bsd/kern/sweet_amfi.c: patch does not apply" and skips it), so CS_DEBUGGED was never set
+and dyld kept ignoring every DYLD_* variable for backboardd.
 
---- a/bsd/kern/sweet_amfi.c
-+++ b/bsd/kern/sweet_amfi.c
-@@ -254,6 +254,23 @@
- 	mount_t mp = vnode_mount(vp);
- 	if (mp != NULL && (vfs_flags(mp) & MNT_ROOTFS)) {
- 		*cs_flags |= CS_PLATFORM_BINARY;
-+		/*
-+		 * dyld refuses DYLD_* for a platform binary unless CS_DEBUGGED is
-+		 * set (it takes the process for one being debugged). The EAGL
-+		 * bridge has to get into the window server, so that one program is
-+		 * marked debuggable; everything else keeps the plain platform flag.
-+		 */
-+		const char *vn_name = vnode_getname(vp);
-+
-+		if (vn_name != NULL) {
-+			if (vn_name[0] == 'b' && vn_name[1] == 'a' && vn_name[2] == 'c' &&
-+			    vn_name[3] == 'k' && vn_name[4] == 'b' && vn_name[5] == 'o' &&
-+			    vn_name[6] == 'a' && vn_name[7] == 'r' && vn_name[8] == 'd' &&
-+			    vn_name[9] == 'd' && vn_name[10] == 'd' && vn_name[11] == 0) {
-+				*cs_flags |= CS_DEBUGGED;
-+			}
-+			vnode_putname(vn_name);
-+		}
- 	}
- 	if (cs_blob != cs_blob->csb_ro_addr && cs_blob->csb_entitlements == NULL) {
- 		sweet_amfi_attach_entitlements(cs_blob);
+This does the same thing in a file whose patches do apply: kern_exec.c already collects
+the image's code signing flags in imgp->ip_csflags and hands them to the process with
+proc_csflags_update(). For the window server, CS_DEBUGGED is added there -- dyld takes
+the process for one being debugged and honours DYLD_INSERT_LIBRARIES -- and a line is
+printed so the log shows it happened.
+
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7357,8 +7357,20 @@
+ 	/*
+ 	 * Override inherited code signing flags with the
+ 	 * ones for the process that is being successfully
+ 	 * loaded
+ 	 */
++	/*
++	 * mi8 0177b: dyld refuses DYLD_* for a platform binary unless the process
++	 * looks debuggable, and this port marks every binary on the root
++	 * filesystem as a platform binary. The EAGL bridge has to get into the
++	 * window server, so that one program is marked debuggable here.
++	 */
++	if (strnstr(imgp->ip_strings, "usr/libexec/backboardd",
++	    strlen(EXECUTABLE_KEY) + MAXPATHLEN) != NULL &&
++	    (imgp->ip_csflags & CS_DEBUGGED) == 0) {
++		printf("sweet: backboardd is marked debuggable so dyld takes its DYLD_* variables\n");
++		imgp->ip_csflags |= CS_DEBUGGED;
++	}
+ 	proc_lock(p);
+ 	proc_csflags_update(p, imgp->ip_csflags);
+ 	proc_unlock(p);
+
