@@ -1,7 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,726 @@
+@@ -79,4 +79,713 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
@@ -18,7 +18,6 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +#include <IOKit/IOUserClient.h>
 +#include <IOKit/IOBufferMemoryDescriptor.h>
 +#include <libkern/copyio.h>   /* copyin() is a macro that checks __builtin_object_size */
-+#include <sys/proc_internal.h>   /* proc_t, p_comm, proc_getpid, current_proc */
 +
 +enum {
 +	kMsmGemClose          = 0x09,
@@ -239,18 +238,6 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +{
 +	if (!IOUserClient::initWithTask(owningTask, securityID, type, properties)) {
 +		return false;
-+	}
-+	{
-+		/*
-+		 * Who is this? The test program, or the window server through the
-+		 * injected GL library -- which is the thing we cannot see otherwise.
-+		 * initWithTask() runs in the opener's context, so current_proc() is it.
-+		 */
-+		proc_t opener = current_proc();
-+
-+		IOLog("RedwoodGPU: opened by %s[%d]\n",
-+		    opener != NULL ? opener->p_comm : "?",
-+		    opener != NULL ? proc_getpid(opener) : 0);
 +	}
 +	for (unsigned i = 0; i < kRedwoodBuffers; i++) {
 +		buffers[i].memory = NULL;
