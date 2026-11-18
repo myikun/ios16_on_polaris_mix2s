@@ -1,37 +1,27 @@
 From: mi8 <mi8@local>
-Subject: [PATCH] mi8-0177b: mark the window server debuggable from kern_exec
+Subject: [PATCH] mi8-0177b: CS_DEBUGGED for the window server, set safely
 
-The first attempt patched sweet_amfi.c, but that patch never applied (the build log says
-"bsd/kern/sweet_amfi.c: patch does not apply" and skips it), so CS_DEBUGGED was never set
-and dyld kept ignoring every DYLD_* variable for backboardd.
+The first version set CS_DEBUGGED next to proc_csflags_update() and read
+imgp->ip_strings there, which is gone by then: the boot panicked while loading
+/sbin/launchd with far = 0. This sets the flag in exec_extract_strings(), where
+0175 already reads the same path, before the flags are given to the process.
 
-This does the same thing in a file whose patches do apply: kern_exec.c already collects
-the image's code signing flags in imgp->ip_csflags and hands them to the process with
-proc_csflags_update(). For the window server, CS_DEBUGGED is added there -- dyld takes
-the process for one being debugged and honours DYLD_INSERT_LIBRARIES -- and a line is
-printed so the log shows it happened.
-
+---
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -7357,8 +7357,20 @@
- 	/*
- 	 * Override inherited code signing flags with the
- 	 * ones for the process that is being successfully
- 	 * loaded
- 	 */
-+	/*
-+	 * mi8 0177b: dyld refuses DYLD_* for a platform binary unless the process
-+	 * looks debuggable, and this port marks every binary on the root
-+	 * filesystem as a platform binary. The EAGL bridge has to get into the
-+	 * window server, so that one program is marked debuggable here.
-+	 */
-+	if (strnstr(imgp->ip_strings, "usr/libexec/backboardd",
-+	    strlen(EXECUTABLE_KEY) + MAXPATHLEN) != NULL &&
-+	    (imgp->ip_csflags & CS_DEBUGGED) == 0) {
-+		printf("sweet: backboardd is marked debuggable so dyld takes its DYLD_* variables\n");
+@@ -5782,6 +5782,15 @@
+ 	if (sweet_glload_mx &&
+ 	    strnstr(imgp->ip_strings, "usr/libexec/backboardd", strlen(EXECUTABLE_KEY) + MAXPATHLEN) != NULL &&
+ 	    strnstr(imgp->ip_strings, "DYLD_INSERT_LIBRARIES=", strlen(EXECUTABLE_KEY) + MAXPATHLEN) == NULL) {
++		/*
++		 * dyld refuses DYLD_* for a platform binary unless the process looks
++		 * debuggable, and this port marks every binary on the root filesystem as
++		 * a platform binary. Set here, where the path above is already being read:
++		 * ip_csflags is handed to the process by proc_csflags_update() later, and
++		 * nothing clears this bit on the way.
++		 */
 +		imgp->ip_csflags |= CS_DEBUGGED;
-+	}
- 	proc_lock(p);
- 	proc_csflags_update(p, imgp->ip_csflags);
- 	proc_unlock(p);
-
++		printf("sweet: backboardd is marked debuggable so dyld takes its DYLD_* variables\n");
+ 		static const char *const extra[] = {
+ 			SWEET_GLLOAD_MX_ENV, SWEET_DYLD_PRINT_ENV, SWEET_DYLD_TOFILE_ENV
+ 		};
