@@ -1,0 +1,16 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0196: print the flags the window server is given
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5822,7 +5822,8 @@
+ 			imgp->ip_csflags |= CS_DEBUGGED;
+ 			imgp->ip_csflags &= ~(CS_REQUIRE_LV | CS_PLATFORM_BINARY | CS_RESTRICT |
+ 			    CS_HARD | CS_KILL | CS_ENFORCEMENT | CS_FORCED_LV);
+-			printf("sweet: backboardd runs without code signing restrictions (0191)\n");
++			printf("sweet: backboardd runs without code signing restrictions (0191)"
++			    " flags %#x\n", imgp->ip_csflags);
+ 		}
+ 	}
+ 	imgp->ip_envc = 0;
