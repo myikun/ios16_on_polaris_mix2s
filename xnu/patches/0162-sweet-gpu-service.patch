@@ -1,7 +1,7 @@
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -79,4 +79,713 @@
+@@ -79,4 +79,714 @@
   * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
   * is what the iPhone userland (MobileGestalt) expects.
   */
@@ -239,6 +239,7 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 +	if (!IOUserClient::initWithTask(owningTask, securityID, type, properties)) {
 +		return false;
 +	}
++	IOLog("RedwoodGPU: a user client was opened\n");
 +	for (unsigned i = 0; i < kRedwoodBuffers; i++) {
 +		buffers[i].memory = NULL;
 +		buffers[i].gpu = 0;
