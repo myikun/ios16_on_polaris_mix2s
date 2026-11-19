@@ -1,0 +1,41 @@
+name: inject
+
+# Builds the window server's injector from src/topaz_inject_console.c, which is topaz's
+# injector with its messages also written to /dev/console (the window server's stderr is
+# /dev/null and syslog does not reach the kernel log ring, so after loading there has been
+# no way to tell whether it ran).
+#
+# The library keeps the install name /topaz/lib/libtopaz-inject.dylib and is signed ad hoc,
+# which is what the loader in the image expects.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          set -e
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          ls -l src/topaz_inject_console.c
+          xcrun --sdk iphoneos clang -target arm64-apple-ios16.0 -isysroot "$SDK" -O2 \
+            -dynamiclib -install_name /topaz/lib/libtopaz-inject.dylib \
+            -framework Foundation -framework CoreFoundation -framework IOKit \
+            -o libtopaz-inject.dylib src/topaz_inject_console.c
+          ls -l libtopaz-inject.dylib
+          codesign -f -s - libtopaz-inject.dylib
+          codesign --verify --verbose=2 libtopaz-inject.dylib && echo signature-verifies
+          # the size of the one in the image, so it can be replaced without touching the
+          # catalog: 70512 bytes
+          stat -f%z libtopaz-inject.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libtopaz-inject
+          path: libtopaz-inject.dylib
+          if-no-files-found: error
