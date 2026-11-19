@@ -1,0 +1,18 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0185: one injected string, as hakios has it
+
+0175 adds three strings and 0184 one; hakios adds one. Turn 0175 off so the argspace
+bookkeeping happens once, and dyld sees exactly the shape that works on this port.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -256,7 +256,7 @@
+  * the environment from the start. SpringBoard draws through backboardd, so backboardd is
+  * where CoreAnimation's GL renderer has to appear.
+  */
+-static int sweet_glload_mx = 1;
++static int sweet_glload_mx = 0;      /* mi8 0185: 0184 adds the one string instead */
+ SYSCTL_INT(_kern, OID_AUTO, sweet_glload_mx, CTLFLAG_RW | CTLFLAG_LOCKED, &sweet_glload_mx, 0,
+     "DYLD_INSERT_LIBRARIES of the EAGL bridge's loader for the window server");
+ #define SWEET_GLLOAD_MX_ENV "DYLD_INSERT_LIBRARIES=/topaz/lib/libtopaz-inject.dylib"
