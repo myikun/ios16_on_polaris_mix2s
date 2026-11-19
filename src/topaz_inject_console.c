@@ -276,6 +276,22 @@ topaz_inject(void)
 		syslog(LOG_NOTICE, "topaz: no GPU service: software renderer");
 		return;
 	}
+	/*
+	 * Open the service even though nothing needs it yet: the kernel logs a line for
+	 * every user client, so this is a mark in the kernel's own log that this library
+	 * ran. A launchd job cannot be given a stderr path instead -- the manifest is
+	 * signed, and an edit to it is ignored.
+	 */
+	{
+		io_connect_t conn = 0;
+
+		if (IOServiceOpen(gpu, mach_task_self(), 0, &conn) == KERN_SUCCESS) {
+			topaz_say("the GPU service accepted an open");
+			IOServiceClose(conn);
+		} else {
+			topaz_say("the GPU service refused an open");
+		}
+	}
 	IOObjectRelease(gpu);
 	topaz_crash_handlers();
 	lib = dlopen(TOPAZ_GL, RTLD_NOW);
