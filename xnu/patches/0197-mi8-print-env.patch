@@ -1,0 +1,32 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0197: print the window server's environment
+
+The injection code runs, the code signing flags are clean, and the injector still
+never starts; this prints what the process is actually given.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5824,6 +5824,22 @@
+ 			    CS_HARD | CS_KILL | CS_ENFORCEMENT | CS_FORCED_LV);
+ 			printf("sweet: backboardd runs without code signing restrictions (0191)"
+ 			    " flags %#x\n", imgp->ip_csflags);
++			/*
++			 * mi8 0197: what is actually in the environment? Every entry, in
++			 * order, so the injected variable can be seen (or its absence).
++			 */
++			{
++				const char *e = imgp->ip_strings;
++				unsigned shown = 0;
++
++				printf("sweet: environment: %u entries\n", imgp->ip_envc);
++				while (e != NULL && *e != 0 && shown < 32) {
++					printf("sweet:   [%u] %.100s\n", shown, e);
++					e += strlen(e) + 1;
++					shown++;
++				}
++				printf("sweet:   (%u shown)\n", shown);
++			}
+ 		}
+ 	}
+ 	imgp->ip_envc = 0;
