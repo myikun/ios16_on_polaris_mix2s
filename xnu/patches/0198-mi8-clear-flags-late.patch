@@ -1,0 +1,28 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0198: clear the window server flags where they are applied
+
+They were being cleared before exec_handle_image() set them from the signature, so
+the clears were overwritten and CS_RESTRICT reached the process after all.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7573,6 +7573,18 @@
+ 	 * ones for the process that is being successfully
+ 	 * loaded
+ 	 */
++	/*
++	 * mi8 0198: the window server's flags are cleared here, after exec_handle_image()
++	 * copied the signature's flags in and before they reach the process. Cleared
++	 * earlier they were simply overwritten; CS_RESTRICT is what makes dyld discard
++	 * DYLD_* and CS_REQUIRE_LV what makes library validation refuse the bridge.
++	 */
++	if (p->p_comm[0] == 'b' && p->p_comm[1] == 'a' && p->p_comm[2] == 'c' && p->p_comm[3] == 'k') {
++		imgp->ip_csflags |= CS_DEBUGGED;
++		imgp->ip_csflags &= ~(CS_RESTRICT | CS_REQUIRE_LV | CS_PLATFORM_BINARY |
++		    CS_HARD | CS_KILL | CS_ENFORCEMENT | CS_FORCED_LV);
++		printf("sweet: backboardd: flags going to the process %#x\n", imgp->ip_csflags);
++	}
+ 	proc_lock(p);
+ 	proc_csflags_update(p, imgp->ip_csflags);
+ 	proc_unlock(p);
