@@ -1,0 +1,27 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0194: no restrictive flags in the code signing blob
+
+They are re-applied from the signature on every exec, which is why clearing them
+in kern_exec changed nothing.
+
+---
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -3991,7 +3991,16 @@
+ 		blob->csb_hash_pageshift = cd->pageSize;
+ 		hash_pagemask = (1U << cd->pageSize) - 1;
+ 		blob->csb_hash_firstlevel_pageshift = 0;
+-		blob->csb_flags = (ntohl(cd->flags) & CS_ALLOWED_MACHO) | CS_VALID;
++		/*
++		 * mi8 0194: the enforcement bits are not carried into the blob.
++		 * CS_RESTRICT makes dyld discard every DYLD_* variable and
++		 * CS_REQUIRE_LV makes library validation refuse a bridge that is only
++		 * ad-hoc signed; both come from the signature of an Apple binary, so
++		 * clearing them in kern_exec was undone here on every exec. Platform
++		 * marking stays, because launchd expects it of its system daemons.
++		 */
++		blob->csb_flags = ((ntohl(cd->flags) & CS_ALLOWED_MACHO) | CS_VALID) &
++		    ~(CS_RESTRICT | CS_REQUIRE_LV | CS_HARD | CS_KILL | CS_ENFORCEMENT | CS_FORCED_LV);
+ 		blob->csb_end_offset = (((vm_offset_t)ntohl(cd->codeLimit) + hash_pagemask) & ~hash_pagemask);
+ 		if ((ntohl(cd->version) >= CS_SUPPORTSSCATTER) && (ntohl(cd->scatterOffset))) {
+ 			const SC_Scatter *scatter = (const SC_Scatter*)
