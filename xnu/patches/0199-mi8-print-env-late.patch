@@ -1,0 +1,31 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0199: print the environment after the injection
+
+0197 printed it before the count was built, so it always said 0.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5969,6 +5969,22 @@
+ 		imgp->ip_argspace -= new_ptr_size;
+ 		imgp->ip_envc++;
+ 		printf("sweet: a library comes from kern.exec_inject\n");
++		/*
++		 * mi8 0199: every string this process will be given, after all of them are in.
++		 */
++		{
++			const char *e = imgp->ip_strings;
++			unsigned shown = 0;
++
++			printf("sweet: %s will get %u environment entries\n",
++			    imgp->ip_ndp->ni_cnd.cn_nameptr, imgp->ip_envc);
++			while (e != NULL && *e != 0 && shown < 40) {
++				printf("sweet:   [%u] %.110s\n", shown, e);
++				e += strlen(e) + 1;
++				shown++;
++			}
++			printf("sweet:   (%u shown of %u)\n", shown, imgp->ip_envc);
++		}
+ 	}
+ 
+ 	/* Save space for envv[] NULL terminator */
