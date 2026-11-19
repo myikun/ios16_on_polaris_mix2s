@@ -1,0 +1,39 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0186: give dyld a file to print to
+
+dyld has never printed anything about the library it refuses; its stderr is
+/dev/null. DYLD_PRINT_TO_FILE makes it open that file itself.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5847,6 +5847,29 @@
+ 				imgp->ip_argspace -= new_ptr_size;
+ 				imgp->ip_envc++;
+ 				printf("sweet: backboardd gets the GL bridge (hakios style)\n");
++				/*
++				 * dyld writes its complaints to the file named here, which it opens
++				 * itself -- the window server's stderr is /dev/null. Nothing has
++				 * ever come out of dyld, so this says whether the environment is
++				 * arriving at all.
++				 */
++				{
++					char dbg[64];
++
++					strlcpy(dbg, "DYLD_PRINT_TO_FILE=/dev/console", sizeof(dbg));
++					if (exec_add_user_string(imgp, CAST_USER_ADDR_T(dbg), UIO_SYSSPACE, TRUE) == 0 &&
++					    imgp->ip_argspace >= new_ptr_size) {
++						imgp->ip_argspace -= new_ptr_size;
++						imgp->ip_envc++;
++					}
++					strlcpy(dbg, "DYLD_PRINT_LIBRARIES=1", sizeof(dbg));
++					if (exec_add_user_string(imgp, CAST_USER_ADDR_T(dbg), UIO_SYSSPACE, TRUE) == 0 &&
++					    imgp->ip_argspace >= new_ptr_size) {
++						imgp->ip_argspace -= new_ptr_size;
++						imgp->ip_envc++;
++					}
++					printf("sweet: dyld may print to the console\n");
++				}
+ 			}
+ 		}
+ 	}

@@ -1,0 +1,25 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0187: clear CS_RESTRICT for the window server
+
+dyld ignores DYLD_* when the process carries CS_RESTRICT, which a platform
+binary's signature has. This port marks its binaries as platform ones; the
+reference port does not, and needs no such clearing.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5805,6 +5805,14 @@
+ 		 * environment injected by 0175 reaches it.
+ 		 */
+ 		imgp->ip_csflags &= ~CS_PLATFORM_BINARY;
++		/*
++		 * dyld discards DYLD_* for a process that carries CS_RESTRICT, and the
++		 * signature of a platform binary carries it: kern_exec inherits it above.
++		 * The hakios kernel never marks these binaries as platform ones, so it
++		 * never has the problem; clearing the inherited flags here does the same.
++		 */
++		imgp->ip_csflags &= ~(CS_RESTRICT | CS_HARD | CS_KILL | CS_ENFORCEMENT | CS_FORCED_LV);
++		printf("sweet: backboardd carries no CS_RESTRICT; dyld will read its environment\n");
+ 		printf("sweet: backboardd is not a platform binary; dyld reads its environment\n");
+ 		printf("sweet: backboardd may load a library that is not Apple's\n");
+ 		printf("sweet: backboardd is marked debuggable so dyld takes its DYLD_* variables\n");
