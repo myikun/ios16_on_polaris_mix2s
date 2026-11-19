@@ -1,0 +1,48 @@
+name: sign
+
+# Patches src/backboardd.orig to link /topaz/lib/libtopaz-inject.dylib and signs the
+# result ad hoc, on macOS, where codesign exists.
+#
+# Why: dyld loads the bridge into the window server only if the binary asks for it with an
+# LC_LOAD_DYLIB; a patched Apple binary has a stale signature and iOS refuses to run it,
+# so it has to be signed again. The file keeps its length (the load command goes into the
+# padding after the existing ones), which is what lets the Windows side write it to the
+# phone by replacing only its data blocks.
+#
+# Upload: src/backboardd.orig (the original from /usr/libexec/real/backboardd) and
+# tools/bbd_add_dylib.py. Artifact: backboardd-signed.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sign:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch
+        run: |
+          set -e
+          cp src/backboardd.orig work-backboardd
+          ls -l work-backboardd
+          python3 tools/bbd_add_dylib.py work-backboardd /topaz/lib/libtopaz-inject.dylib
+          ls -l work-backboardd
+
+      - name: Sign
+        run: |
+          set -e
+          codesign -f -s - work-backboardd
+          codesign -dv work-backboardd 2>&1 | head -10
+          codesign --verify --verbose=2 work-backboardd && echo signature-verifies
+          size_before=$(stat -f%z src/backboardd.orig)
+          size_after=$(stat -f%z work-backboardd)
+          echo "size before $size_before, after $size_after"
+          [ "$size_before" = "$size_after" ] || echo "WARNING: size changed; the data-block replacement will not work"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backboardd-signed
+          path: work-backboardd
+          if-no-files-found: error
