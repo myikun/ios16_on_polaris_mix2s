@@ -1,0 +1,18 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0193: inject into topaz_test instead, to isolate the library
+
+If topaz_test stops running, the library kills whatever it enters; if it still
+renders, the window server is the special case.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5609,7 +5609,7 @@
+  * from /etc/inject.conf; this port has no such init, so it starts out filled.
+  */
+ static char exec_inject_conf[512] =
+-    "/topaz/lib/libtopaz-inject.dylib backboardd";
++    "/topaz/lib/libtopaz-inject.dylib topaz_test";      /* mi8 0193: a program we control */
+ SYSCTL_STRING(_kern, OID_AUTO, exec_inject, CTLFLAG_RW | CTLFLAG_LOCKED,
+     exec_inject_conf, sizeof(exec_inject_conf),
+     "LIBRARY NAME... [; LIBRARY NAME...]: programs started with the library inserted");
