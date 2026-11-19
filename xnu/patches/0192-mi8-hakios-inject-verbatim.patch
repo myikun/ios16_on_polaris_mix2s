@@ -1,0 +1,103 @@
+From: mi8 <mi8@local>
+Subject: [PATCH] mi8-0192: the reference port's injection, copied
+
+exec_inject_env() from hakios-xnu-kernel, unchanged, config prefilled.
+
+---
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5602,9 +5602,72 @@
+  *		to arrays of user space pointers.
+  */
+ __attribute__((noinline))
++/*
++ * The reference port's injection (xnu/hakios.patch, exec_inject_env): the sysctl
++ * kern.exec_inject holds "LIBRARY NAME NAME ..."; every program whose file name is one of
++ * the NAMEs is started with DYLD_INSERT_LIBRARIES=LIBRARY. Their init fills that string
++ * from /etc/inject.conf; this port has no such init, so it starts out filled.
++ */
++static char exec_inject_conf[512] =
++    "/topaz/lib/libtopaz-inject.dylib backboardd";
++SYSCTL_STRING(_kern, OID_AUTO, exec_inject, CTLFLAG_RW | CTLFLAG_LOCKED,
++    exec_inject_conf, sizeof(exec_inject_conf),
++    "LIBRARY NAME... [; LIBRARY NAME...]: programs started with the library inserted");
++
++static bool
++exec_inject_env(struct image_params *imgp, char *env, size_t size)
++{
++	const char *name, *p = exec_inject_conf;
++	size_t namelen, used;
++	bool any = false;
++
++	if (*p == 0 || imgp->ip_ndp == NULL) {
++		return false;
++	}
++	name = imgp->ip_ndp->ni_cnd.cn_nameptr;
++	namelen = imgp->ip_ndp->ni_cnd.cn_namelen;
++	used = strlcpy(env, "DYLD_INSERT_LIBRARIES=", size);
++	while (*p != 0) {
++		const char *library;
++		size_t liblen;
++		bool matched = false;
++
++		while (*p == ' ' || *p == ';') {
++			p++;
++		}
++		library = p;
++		while (*p != 0 && *p != ' ' && *p != ';') {
++			p++;
++		}
++		liblen = (size_t)(p - library);
++		while (*p == ' ') {
++			const char *word = ++p;
++
++			while (*p != 0 && *p != ' ' && *p != ';') {
++				p++;
++			}
++			if (!matched && (size_t)(p - word) == namelen && namelen != 0 && liblen != 0 &&
++			    strncmp(word, name, namelen) == 0) {
++				matched = true;
++			}
++		}
++		if (matched && liblen != 0 && used + 1 + liblen < size) {
++			if (any) {
++				env[used++] = ':';
++			}
++			memcpy(env + used, library, liblen);
++			used += liblen;
++			env[used] = 0;
++			any = true;
++		}
++	}
++	return any;
++}
++
+ static int
+ exec_extract_strings(struct image_params *imgp)
+ {
++	char            mi8_inject_env[512];
+ 	int error = 0;
+ 	int     ptr_size = (imgp->ip_flags & IMGPF_WAS_64BIT_ADDR) ? 8 : 4;
+ 	int new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
+@@ -5872,6 +5935,21 @@
+ 				}
+ 			}
+ 		}
++	}
++
++	/* one more variable for the programs that get our library inside them */
++	if (exec_inject_env(imgp, mi8_inject_env, sizeof(mi8_inject_env))) {
++		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(mi8_inject_env), UIO_SYSSPACE, TRUE);
++		if (error) {
++			goto bad;
++		}
++		if (imgp->ip_argspace < new_ptr_size) {
++			error = E2BIG;
++			goto bad;
++		}
++		imgp->ip_argspace -= new_ptr_size;
++		imgp->ip_envc++;
++		printf("sweet: a library comes from kern.exec_inject\n");
+ 	}
+ 
+ 	/* Save space for envv[] NULL terminator */
